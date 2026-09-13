@@ -92,9 +92,14 @@ export interface AgentWorkflowOptions<T> {
 
 /**
  * Run one agent workflow: `body` does the workflow's own work and calls `run`
- * for the agent run itself, as many times as it has runs to make (a reviewer
- * with no criteria to tick makes none). Nothing is returned: what a workflow
- * produces it writes, and a failure ends the process rather than the call.
+ * for the agent run itself, once or not at all (a reviewer with no criteria to
+ * tick makes no run). Once, not more: rotation reads the accounts file and
+ * deletes it (`loadAccounts`), so a second `run` would fail the process on the
+ * file that is no longer there rather than draw a second account. A workflow
+ * that ever needs two runs needs that read made once first.
+ *
+ * Nothing is returned: what a workflow produces it writes, and a failure ends
+ * the process rather than the call.
  */
 export const runAgentWorkflow = async <T = never>(
   options: AgentWorkflowOptions<T>,
