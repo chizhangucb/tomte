@@ -317,8 +317,8 @@ const keepInProgress = (needs: RetryNeeds, pr: string, reason: string): void => 
 };
 
 /**
- * Tell the author of a PR the factory did not author (#183): the label
- * `prFix` chose, and what failed, on their own thread. `note` is undefined when
+ * Tell the author of a PR the factory did not author (#183): the label the
+ * PR fix chose, and what failed, on their own thread. `note` is undefined when
  * this thread already carries the record; when there is one it goes last, since
  * by then the label is on.
  */

@@ -281,6 +281,13 @@ export const updateBranch = async (
         const reason = `update-branch refused: ${conflict.reason}`;
         outcome.action = conflict.action;
         outcome.reason = reason;
+        // A PR already carrying a hand-off label is skipped, not re-commented:
+        // prDisposition never returns skip, so acting on it here would re-label
+        // and re-comment on every push to main, which HANDED_OFF_LABELS exists to stop.
+        if (conflict.action === "skip") {
+          console.log(`#${conflict.number}: ${reason}, left alone.`);
+          continue;
+        }
         actOnConflict(conflict.number, reason, prDisposition(pr, base));
         continue;
       }

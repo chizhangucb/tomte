@@ -185,6 +185,27 @@ test("a conflict the API answers with, on a PR read as UNKNOWN, is handed off th
   assert.match(outcome.reason, /update-branch refused/);
 });
 
+test("a refused update on a PR already carrying a hand-off label is left alone, not re-commented", async () => {
+  // The scan read UNKNOWN and the PR is behind, so an update is tried; GitHub
+  // refuses with a conflict. But the PR already carries `agent:blocked`, so
+  // planConflict decides skip: re-commenting and re-labelling on every push to
+  // main is exactly what HANDED_OFF_LABELS exists to stop.
+  const { needs, writes } = inMemory({
+    openPrs: () => [listed(1, { mergeable: "UNKNOWN", labels: [BLOCKED_LABEL] })],
+    behindBy: () => 2,
+    commit: (sha) => ({ sha, parents: ["p0"], committerLogin: "sandcastle-agent[bot]" }),
+    statuses: () => [],
+    requestUpdate: refuses("merge conflict between base and head"),
+  });
+  const result = await updateBranch(needs, config());
+  // The refused call throws rather than recording; the skip that follows writes
+  // nothing, so no comment and no label land on the already-held PR.
+  assert.deepEqual(writes, []);
+  const outcome = result.outcomes.find((o) => o.number === 1)!;
+  assert.equal(outcome.action, "skip");
+  assert.match(outcome.reason, /already agent:blocked/);
+});
+
 test("a PR with no auto-merge is skipped and named, and nothing is written for it", async () => {
   const { needs, writes } = inMemory({
     openPrs: () => [listed(1, { autoMerge: false })],
