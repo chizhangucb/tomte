@@ -79,6 +79,10 @@ export const variablesReadableArgs = (target: string): string[] => [
  */
 const NO_REASON = "no reason given";
 
+/** The two repository variables, named once so the read and the line agree. */
+const PAUSE_VARIABLE = "FACTORY_PAUSED";
+const WAIVER_VARIABLE = "FACTORY_CHECKS_WAIVED";
+
 /**
  * The pause (#256): a human's declaration that one target's factory starts and
  * advances no work. The caller gates every such job on the same variable, so
@@ -89,7 +93,7 @@ const NO_REASON = "no reason given";
  */
 export const PAUSE = {
   /** The repository variable holding the reason, beside `FACTORY_CHECKS_WAIVED`. */
-  variable: "FACTORY_PAUSED",
+  variable: PAUSE_VARIABLE,
 
   /**
    * Whether the target is paused, and why: the reason, or nothing when it is
@@ -118,7 +122,7 @@ export const PAUSE = {
    * target, which is how a forgotten pause goes unnoticed.
    */
   line: (target: string, reason: string): string =>
-    `${target} skipped: paused (${reason}); resume with \`gh variable delete FACTORY_PAUSED --repo ${target}\``,
+    `${target} skipped: paused (${reason}); resume with \`gh variable delete ${PAUSE_VARIABLE} --repo ${target}\``,
 };
 
 /**
@@ -131,7 +135,7 @@ export const PAUSE = {
  */
 export const WAIVER = {
   /** The repository variable holding the reason, beside `FACTORY_PAUSED`. */
-  variable: "FACTORY_CHECKS_WAIVED",
+  variable: WAIVER_VARIABLE,
 
   /** The variable's value, or nothing: a variable set to blank carries no reason to act on. */
   reason: (raw: string): string | undefined => variableValue(raw),
@@ -145,5 +149,5 @@ export const WAIVER = {
   line: (target: string, reason: string | undefined): string | undefined =>
     reason === undefined
       ? undefined
-      : `${target} WAIVED: ${reason} (FACTORY_CHECKS_WAIVED is set on the target; close it with \`scripts/waive-factory-checks.sh ${target} off\`)`,
+      : `${target} WAIVED: ${reason} (${WAIVER_VARIABLE} is set on the target; close it with \`scripts/waive-factory-checks.sh ${target} off\`)`,
 };
