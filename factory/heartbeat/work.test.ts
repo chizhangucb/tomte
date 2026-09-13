@@ -18,8 +18,7 @@ import { test } from "node:test";
 
 import { PROJECTIONS } from "../dispatch/gh-read.ts";
 import { DEFAULT_DEADLINES } from "../dispatch/reconcile.ts";
-import { FACTORY_STATE_LABELS } from "../dispatch/select.ts";
-import { HOLD_LABELS, IMPLEMENT_LABEL, PARKED_LABELS, READY_LABEL } from "../lib/labels.ts";
+import { FACTORY_STATE_LABELS, HOLD_LABELS, IMPLEMENT_LABEL, PARKED_LABELS, READY_LABEL } from "../lib/labels.ts";
 import { HEARTBEAT_INTERVAL_MINUTES } from "./interval.ts";
 import { type OpenSubject, fromGitHub, openWorkArgs, sweepNeed } from "./work.ts";
 

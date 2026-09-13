@@ -13,21 +13,10 @@
  * --experimental-strip-types` without installing the engine.
  */
 
-import { HOLD_LABELS, READY_LABEL } from "../lib/labels.ts";
+import { FACTORY_STATE_LABELS, HOLD_LABELS, READY_LABEL } from "../lib/labels.ts";
 import { issuesClosedBy } from "../lib/linked-issue.ts";
 import { authorAssociation, type AuthorAssociation, type TrustPolicy } from "../lib/trusted-authors.ts";
 import { parseAcceptanceCriteria } from "../lib/verdict.ts";
-
-export const DISPATCH_LABEL = "agent:implement";
-
-/** The factory already holds this ticket in some state. */
-export const FACTORY_STATE_LABELS = [
-  "agent:implement",
-  "agent:in-progress",
-  "agent:review",
-  "agent:blocked",
-  "needs-human",
-] as const;
 
 export type DispatchIssue = {
   number: number;

@@ -88,6 +88,24 @@ export const HOLD_LABELS: readonly string[] = [HOLD_LABEL];
 export const HANDED_OFF_LABELS: readonly string[] = [IMPLEMENT_LABEL, IN_PROGRESS_LABEL, REVIEW_LABEL, BLOCKED_LABEL];
 
 /**
+ * The label the dispatcher adds to dispatch a ticket. The implementer's own
+ * label under the name the dispatcher's log and its tests call it by: one
+ * string, so the label a ticket is dispatched with is the label the workflow
+ * that starts on it listens for.
+ */
+export const DISPATCH_LABEL = IMPLEMENT_LABEL;
+
+/**
+ * The factory already holds this ticket or PR in some state, so no agent is
+ * started on it afresh: the dispatcher skips such a ticket and the heartbeat
+ * counts it as work the sweep owns. Derived from the set above rather than
+ * listed again, so a label handed to an agent is a label the dispatcher knows
+ * the factory is on; `needs-human` joins them because an escalated subject is
+ * the factory's state too, the one a human answers.
+ */
+export const FACTORY_STATE_LABELS: readonly string[] = [...HANDED_OFF_LABELS, ESCALATION_LABEL];
+
+/**
  * The two namespaces the factory writes labels in. A target's caller drops
  * the `unlabeled` events for both, so that the factory's own label removals
  * do not wake a sweep that re-stamps the ticket (#170), and

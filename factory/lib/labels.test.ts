@@ -7,13 +7,15 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { test } from "node:test";
 
-import { DISPATCH_LABEL, FACTORY_STATE_LABELS } from "../dispatch/select.ts";
 import {
   BLOCKED_LABEL,
+  DISPATCH_LABEL,
   ESCALATION_LABEL,
+  FACTORY_STATE_LABELS,
   HANDED_OFF_LABELS,
   HOLD_LABEL,
   HOLD_LABELS,
+  IMPLEMENT_LABEL,
   PARKED_LABELS,
   READY_LABEL,
   REVIEW_LABEL,
@@ -69,6 +71,28 @@ test("PARKED_LABELS is the label module's, read from there by the reconciler and
   assert.deepEqual([...PARKED_LABELS], ["agent:blocked", "needs-human"]);
   const elsewhere = importersOf("PARKED_LABELS").filter(({ from }) => from !== "factory/lib/labels.ts");
   assert.deepEqual(elsewhere, [], "every reader imports it from lib/labels.ts");
+});
+
+test("the factory state labels are the handed-off set plus the escalation, and the dispatcher writes one of them", () => {
+  // The dispatcher spelled both of these itself, so `HANDED_OFF_LABELS` and
+  // `FACTORY_STATE_LABELS` were two hand-written lists of the same labels: a
+  // label added to one and not the other would leave update-branch and the
+  // dispatcher disagreeing about whether an agent already holds the subject.
+  // The five of ADR 0005, in the order the dispatcher reports them.
+  assert.deepEqual(
+    [...FACTORY_STATE_LABELS],
+    ["agent:implement", "agent:in-progress", "agent:review", "agent:blocked", "needs-human"],
+  );
+  for (const label of HANDED_OFF_LABELS) {
+    assert.ok(FACTORY_STATE_LABELS.includes(label), `${label} hands the subject to an agent, so the factory is on it`);
+  }
+  assert.ok(FACTORY_STATE_LABELS.includes(ESCALATION_LABEL), "an escalated ticket is still the factory's state");
+  // The dispatcher's name for the start label is that label, not a second spelling of it.
+  assert.equal(DISPATCH_LABEL, IMPLEMENT_LABEL);
+  for (const name of ["DISPATCH_LABEL", "FACTORY_STATE_LABELS"]) {
+    const elsewhere = importersOf(name).filter(({ from }) => from !== "factory/lib/labels.ts");
+    assert.deepEqual(elsewhere, [], `every reader imports ${name} from lib/labels.ts`);
+  }
 });
 
 /** The markdown a reader meets: everything under `docs/`, plus the front door and the glossary. */
