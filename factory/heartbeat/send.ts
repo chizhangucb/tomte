@@ -35,10 +35,8 @@ import { GhError, gh } from "../lib/gh.ts";
 import { READY_LABEL } from "../lib/labels.ts";
 import { cadenceLine, passLogPath, withPass } from "./cadence.ts";
 import { type TargetOutcome, sendHeartbeat } from "./heartbeat.ts";
-import { PAUSE_VARIABLE, pauseLine, pauseReadArgs, pauseReason } from "./pause.ts";
 import { TARGET_REPOS } from "./targets.ts";
-import { isUnset, variablesReadableArgs } from "./variable.ts";
-import { WAIVER_VARIABLE, waiverLine, waiverReadArgs, waiverReason } from "./waiver.ts";
+import { PAUSE, WAIVER, isUnset, variableReadArgs, variablesReadableArgs } from "./variable.ts";
 import { type OpenSubject, fromGitHub, openWorkArgs } from "./work.ts";
 
 const dryRun = process.env.DRY_RUN === "1";
@@ -74,7 +72,7 @@ const readOpenWork = (target: string): OpenSubject[] => fromGitHub(parseItems(gh
  */
 const readPause = (target: string): string | undefined => {
   try {
-    return pauseReason(gh(pauseReadArgs(target)));
+    return PAUSE.reason(gh(variableReadArgs(target, PAUSE.variable)));
   } catch (error) {
     // `stderr`, not the rendered message, for the reason `readWaiverReason` gives.
     if (!(error instanceof GhError) || !isUnset(error.stderr)) throw error;
@@ -108,19 +106,19 @@ const asIfRunning = (): undefined => undefined;
  */
 const nagIfWaived = (target: string): void => {
   if (dryRun) return;
-  const line = waiverLine(target, readWaiverReason(target));
+  const line = WAIVER.line(target, readWaiverReason(target));
   if (line) console.log(`${at()} ${line}`);
 };
 
 /** One target's waiver reason, or nothing: an unset variable is a 404 and means no waiver. */
 const readWaiverReason = (target: string): string | undefined => {
   try {
-    return waiverReason(gh(waiverReadArgs(target)));
+    return WAIVER.reason(gh(variableReadArgs(target, WAIVER.variable)));
   } catch (error) {
     // `stderr`, not the rendered message: `lib/gh.ts` carries the fields precisely so no
     // caller reads a decision back out of the line it renders.
     if (error instanceof GhError && isUnset(error.stderr)) return undefined;
-    console.error(`${at()} could not read ${WAIVER_VARIABLE} on ${target}: ${errorMessage(error)}`);
+    console.error(`${at()} could not read ${WAIVER.variable} on ${target}: ${errorMessage(error)}`);
     return undefined;
   }
 };
@@ -171,7 +169,7 @@ const outcomes = sendHeartbeat({
     // A plain line, not an `::error::` annotation: the host is not a GitHub
     // runner (a heartbeat on GitHub's own cron is the thing this replaces).
     if (outcome.outcome === "failed") console.error(`${at()} factory-sweep FAILED for ${outcome.target}: ${outcome.error}`);
-    else if (outcome.outcome === "paused") console.log(`${at()} ${pauseLine(outcome.target, outcome.reason)}`);
+    else if (outcome.outcome === "paused") console.log(`${at()} ${PAUSE.line(outcome.target, outcome.reason)}`);
     else if (outcome.outcome === "skipped") console.log(`${at()} ${outcome.target} skipped: nothing waiting`);
     else if (outcome.outcome === "nothing-due") console.log(`${at()} ${outcome.target} not woken: work open, nothing due`);
     else console.log(`${at()} factory-sweep dispatched to ${outcome.target}${dryRun ? " (dry run)" : ""}`);

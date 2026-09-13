@@ -24,9 +24,11 @@ import { fileURLToPath } from "node:url";
 import { IMPLEMENT_LABEL } from "../lib/labels.ts";
 import { DISAGREEING_PASSES, PASS_LOG_ENV } from "./cadence.ts";
 import { HEARTBEAT_INTERVAL_MINUTES, INTERVAL_PHRASE } from "./interval.ts";
-import { PAUSE_VARIABLE } from "./pause.ts";
 import { TARGET_REPOS } from "./targets.ts";
-import { WAIVER_VARIABLE } from "./waiver.ts";
+import { PAUSE, WAIVER } from "./variable.ts";
+
+const PAUSE_VARIABLE = PAUSE.variable;
+const WAIVER_VARIABLE = WAIVER.variable;
 
 const repoRoot = new URL("../../", import.meta.url);
 const ENTRYPOINT = "factory/heartbeat/send.ts";
