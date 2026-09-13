@@ -25,6 +25,7 @@ import { escalationLabels } from "../retry/escalation.ts";
 import {
   type Deadlines,
   type Decision,
+  type MergeReads,
   type PrComment,
   type PrState,
   type Run,
@@ -33,13 +34,10 @@ import {
   type TicketState,
   type VerdictState,
   leftAlone,
-  leftAloneFromListing,
-  onMergePath,
   reconcile,
   roleFromJobs,
   runsFor,
   toldNoTicketIn,
-  whyLeftAlone,
 } from "./reconcile.ts";
 
 /** A run's jobs, as much of each as `roleFromJobs` reads. */
@@ -170,32 +168,31 @@ export const sweep = (needs: Needs, config: SweepConfig): SweepResult => {
   };
 
   /**
-   * A PR that is not a factory PR (#182): who opened its ticket, and the verdict
-   * on its head, read only past the reasons to leave it alone that the listing
-   * already answers. Auto-merge is not asked about; the reconciler asks for a
-   * verdict on such a PR armed or not, and that decision never arms it.
+   * The costly merge-state facts the reconciler asks for, backed by the Needs
+   * record and lazy: each fires only when the reconciler reaches the branch that
+   * consults it (#302), so pre-walking which PRs to read for is no longer this
+   * script's job. A PR left alone before that branch reads nothing.
+   *
+   * The soft-fail reads keep this script's policy behind them: an unreadable
+   * ticket author (#182) or comment thread (#230) leaves the fact unknown, the
+   * direction the reconciler does less on, rather than aborting. The hard reads
+   * (verdict, behind-by, and the head commit date behind `headSince`) throw
+   * `GhError`, which the abort path below turns into one aborted pass.
    */
-  const withUnjudgedState = (pr: PrState, createdAt: string): PrState => {
-    if (leftAlone(pr.labels)) return pr;
-    const listed = leftAloneFromListing(pr);
-    if (listed) return listed.reason === "no-ticket" ? { ...pr, toldNoTicket: toldNoTicketOn(pr.number) } : pr;
-    if (pr.closes === undefined) return pr;
-    const ticketAuthor = ticketAuthorOf(pr.closes);
-    if (whyLeftAlone({ ...pr, ticketAuthor }, policy)) return { ...pr, ticketAuthor };
-    const verdict = needs.verdict(pr.headSha);
-    if (verdict !== "none") return { ...pr, ticketAuthor, verdict };
-    return { ...pr, ticketAuthor, verdict, headSince: headSince(pr, createdAt) };
-  };
-
-  const withMergeState = ({ pr, createdAt }: OpenPr): PrState => {
-    if (!onMergePath(pr.labels)) return pr;
-    if (!pr.factory) return withUnjudgedState(pr, createdAt);
-    if (!pr.autoMerge) return { ...pr, headSince: headSince(pr, createdAt) };
-    const verdict = needs.verdict(pr.headSha);
-    if (verdict === "none") return { ...pr, verdict, headSince: headSince(pr, createdAt) };
-    if (verdict !== "success") return { ...pr, verdict };
-    return { ...pr, verdict, behindBy: needs.behindBy(pr.headSha) };
-  };
+  const mergeReads = (createdAt: ReadonlyMap<number, string>): MergeReads => ({
+    verdict: (pr) => needs.verdict(pr.headSha),
+    behindBy: (pr) => needs.behindBy(pr.headSha),
+    headSince: (pr) => {
+      // Every open PR is in the map, so `created` is defined for any PR the
+      // reconciler passes in. An unknown head date reads as undefined, which the
+      // reconciler treats as overdue, rather than as "now", which is within every
+      // deadline and would hide a lost date instead of surfacing it.
+      const created = createdAt.get(pr.number);
+      return created === undefined ? undefined : headSince(pr, created);
+    },
+    ticketAuthor: (pr) => (pr.closes === undefined ? undefined : ticketAuthorOf(pr.closes)),
+    toldNoTicket: (pr) => toldNoTicketOn(pr.number),
+  });
 
   const lookbackMinutes = Math.max(deadlines.stuckMinutes, deadlines.verdictMinutes, deadlines.updateMinutes) + 30;
   /** Only the runs that could cover a labeled subject need their jobs read. */
@@ -221,24 +218,31 @@ export const sweep = (needs: Needs, config: SweepConfig): SweepResult => {
     return runs;
   };
 
-  const readSnapshot = (): Snapshot => {
+  const readSnapshot = (): { snapshot: Snapshot; createdAt: Map<number, string> } => {
     const issues = needs.openTickets();
-    const prs = needs.openPrs().map(withMergeState);
-    return { now: now.toISOString(), base, issues, prs, runs: readRuns(issues, prs), sweepUrl: runUrl };
+    const open = needs.openPrs();
+    const prs = open.map((o) => o.pr);
+    const createdAt = new Map(open.map((o) => [o.pr.number, o.createdAt]));
+    return { snapshot: { now: now.toISOString(), base, issues, prs, runs: readRuns(issues, prs), sweepUrl: runUrl }, createdAt };
   };
 
-  /* A failed read aborts the pass: a partial snapshot would read as stranded subjects and repair them wrongly. */
+  /* A failed hard read aborts the pass: a partial snapshot, or a costly read the
+     reconciler could not make, would read as stranded subjects and repair them
+     wrongly. The reconciler's own merge-state reads run inside this try too, so a
+     hard one that throws aborts here rather than crashing mid-decision. */
   let snapshot: Snapshot;
+  let decisions: readonly Decision[];
   try {
-    snapshot = readSnapshot();
+    const read = readSnapshot();
+    snapshot = read.snapshot;
+    decisions = reconcile(snapshot, deadlines, policy, mergeReads(read.createdAt));
   } catch (error) {
     if (!(error instanceof GhError)) throw error;
-    const aborted = `Sweep of ${repo} aborted before deciding anything: ${error.message}`;
+    const aborted = `Sweep of ${repo} aborted before repairing anything: ${error.message}`;
     console.error(`::error::${aborted}`);
     return { aborted, decisions: [], applied: [], refused: [], failed: [] };
   }
 
-  const decisions = reconcile(snapshot, deadlines, policy);
   console.log(
     `Sweep of ${repo} at ${snapshot.now}: ${snapshot.issues.length} open issue(s), ${snapshot.prs.length} open PR(s) on ${base}, ${snapshot.runs.length} run(s) in the last ${lookbackMinutes} min or live; deadlines stuck ${deadlines.stuckMinutes}, verdict ${deadlines.verdictMinutes}, update ${deadlines.updateMinutes} min.`,
   );

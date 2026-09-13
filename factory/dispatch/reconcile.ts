@@ -4,10 +4,12 @@
  * Every factory transition is event-driven (a label, a PR event, a push); a
  * lost or cancelled event leaves a ticket or PR stranded. The dispatcher's
  * sweep reads real state and repairs anything past its deadline, so a lost
- * event costs at most one sweep. Pure: a snapshot in (open issues and PRs
- * with labels and timestamps, the recent run list, the verdict and
- * staleness of auto-merge PRs), a decision per candidate out. `sweep.ts`
- * builds the snapshot and applies the repairs.
+ * event costs at most one sweep. A snapshot in (open issues and PRs with
+ * labels and timestamps, the recent run list), a decision per candidate out;
+ * the costly merge-state facts (a PR head's verdict and staleness, its
+ * ticket's author) are asked for through a `reads` object at the branch that
+ * consults each, so a candidate a decision leaves alone reads nothing (#302).
+ * `sweep.ts` backs that reader with its Needs record and applies the repairs.
  *
  * Stuck states and repairs:
  * - ticket in agent:implement or agent:in-progress with no live implement
@@ -196,6 +198,37 @@ export type Decision = {
   log: string;
   /** Posted on the subject when the action is applied. */
   comment?: string;
+};
+
+/**
+ * The costly facts about a PR the reconciler consults only on some branches, a
+ * GitHub call each. The reconciler asks for one at the branch that needs it, so
+ * a PR a decision leaves alone before that branch costs no call (#302). The
+ * default reads them off the snapshot the caller already filled, which is how
+ * `reconcile.test.ts` drives the reconciler unchanged; the sweep passes a reader
+ * backed by its Needs record, fetching each lazily and keeping its own soft-fail
+ * policy behind it.
+ */
+export type MergeReads = {
+  /** factory/verdict on the head; undefined when the caller left it unread. */
+  verdict: (pr: PrState) => VerdictState | undefined;
+  /** Commits on the base the head lacks; undefined when unread. */
+  behindBy: (pr: PrState) => number | undefined;
+  /** The later of the PR's creation and its head commit; undefined when unread. */
+  headSince: (pr: PrState) => string | undefined;
+  /** Whoever opened the ticket the PR closes; undefined when unread or it closes none. */
+  ticketAuthor: (pr: PrState) => Author | undefined;
+  /** Whether the factory already told the PR it closes no ticket; undefined when unread. */
+  toldNoTicket: (pr: PrState) => boolean | undefined;
+};
+
+/** Reads each merge-state fact off a snapshot the caller already filled: the default the reconciler's own tests use. */
+const snapshotReads: MergeReads = {
+  verdict: (pr) => pr.verdict,
+  behindBy: (pr) => pr.behindBy,
+  headSince: (pr) => pr.headSince,
+  ticketAuthor: (pr) => pr.ticketAuthor,
+  toldNoTicket: (pr) => pr.toldNoTicket,
 };
 
 const minutesSince = (now: number, iso: string): number => Math.max(0, Math.floor((now - Date.parse(iso)) / 60_000));
@@ -401,9 +434,9 @@ const decidePrLabel = (p: PrState, snap: Snapshot, deadlines: Deadlines, held: s
 };
 
 /** The age of a head and the log prefix that reports it; `undefined` age means unknown, which is overdue. */
-const sinceHead = (p: PrState, what: string, now: number, deadline: number): { age: number | undefined; head: string } => {
-  const age = p.headSince === undefined ? undefined : minutesSince(now, p.headSince);
-  const since = p.headSince === undefined ? "unknown" : `${p.headSince}, ${age} min ago`;
+const sinceHead = (p: PrState, what: string, now: number, deadline: number, headSince: string | undefined): { age: number | undefined; head: string } => {
+  const age = headSince === undefined ? undefined : minutesSince(now, headSince);
+  const since = headSince === undefined ? "unknown" : `${headSince}, ${age} min ago`;
   return { age, head: `#${p.number} (pr) ${what} since ${since}, deadline ${deadline} min` };
 };
 
@@ -414,15 +447,15 @@ const sinceHead = (p: PrState, what: string, now: number, deadline: number): { a
  * called a guard: CONTEXT.md keeps that word for a harness check under
  * `scripts/guards/`.
  */
-export type LeftAlone = { reason: "draft" | "fork" | "no-ticket" | "untrusted-ticket-author"; why: string };
+type LeftAlone = { reason: "draft" | "fork" | "no-ticket" | "untrusted-ticket-author"; why: string };
 
 /**
- * The reasons `gh pr list` alone answers, in order. Exported because the sweep
- * asks it too: a PR one of these leaves alone needs no further read, so its
- * ticket's author and its head's verdict are read only past them, and the
- * sweep and the decision cannot disagree about which PRs those are.
+ * The reasons `gh pr list` alone answers, in order: a PR one of these leaves
+ * alone needs no costly read, so the walk reaches its ticket's author and its
+ * head's verdict only past them. A private step of the one walk (#302); before
+ * that the sweep called it too, to pre-walk which PRs to read for.
  */
-export const leftAloneFromListing = (p: PrState): LeftAlone | undefined => {
+const leftAloneFromListing = (p: PrState): LeftAlone | undefined => {
   if (p.draft) return { reason: "draft", why: "a draft is its author saying it is not ready" };
   if (p.fork) return { reason: "fork", why: "its head is in another repository, which agent-review.yml refuses with a comment" };
   if (p.closes === undefined) return { reason: "no-ticket", why: "its body closes no ticket, so there are no acceptance criteria to judge" };
@@ -510,14 +543,15 @@ const untrustedTicket = (ticket: number, author: Author | undefined, policy: Tru
 
 /**
  * The first reason to leave a PR that is not a factory PR alone, or undefined
- * when there is none. Exported so the sweep reads the verdict and the head
- * only past every reason, the ticket's author included.
+ * when there is none. A private step of the one walk (#302): the ticket's
+ * author is read through `reads` only here, past every cheaper reason, so a PR
+ * a cheaper reason leaves alone never reads it.
  */
-export const whyLeftAlone = (p: PrState, policy: TrustPolicy): LeftAlone | undefined => {
+const whyLeftAlone = (p: PrState, policy: TrustPolicy, reads: MergeReads): LeftAlone | undefined => {
   const listed = leftAloneFromListing(p);
   // `closes` is undefined only when the listing already said no-ticket; the check narrows it.
   if (listed || p.closes === undefined) return listed;
-  return untrustedTicket(p.closes, p.ticketAuthor, policy);
+  return untrustedTicket(p.closes, reads.ticketAuthor(p), policy);
 };
 
 /**
@@ -541,30 +575,31 @@ export const whyLeftAlone = (p: PrState, policy: TrustPolicy): LeftAlone | undef
  * the reviewer, a held PR gets no agent, and a PR whose ticket is held counts
  * as held, exactly as it does on the factory path below.
  */
-const decideUnjudged = (p: PrState, snap: Snapshot, deadlines: Deadlines, held: string | undefined, policy: TrustPolicy): Decision => {
+const decideUnjudged = (p: PrState, snap: Snapshot, deadlines: Deadlines, held: string | undefined, policy: TrustPolicy, reads: MergeReads): Decision => {
   const subject: Subject = { kind: "pr", number: p.number };
   const none = (log: string): Decision => ({ subject, action: { type: "none" }, log });
   if (held) return none(`#${p.number} (pr) not a factory PR, deadline ${deadlines.verdictMinutes} min: held: ${held}`);
-  const reason = whyLeftAlone(p, policy);
+  const reason = whyLeftAlone(p, policy, reads);
   if (reason) {
     const log = `#${p.number} (pr) not a factory PR, deadline ${deadlines.verdictMinutes} min: left alone (${reason.reason}): ${reason.why}`;
     // The one reason the producer can fix and nobody can fix for them, so it is
     // the one that speaks (#230). Told already, or never read, and it stays quiet.
-    if (reason.reason !== "no-ticket" || p.toldNoTicket !== false) return none(log);
+    if (reason.reason !== "no-ticket" || reads.toldNoTicket(p) !== false) return none(log);
     return { subject, action: { type: "comment", pr: p.number }, log: `${log}: comment`, comment: noTicketComment(reason.why, snap.sweepUrl) };
   }
   const sha = p.headSha.slice(0, 7);
-  if (p.verdict === undefined) return none(`#${p.number} (pr) not a factory PR, factory/verdict on ${sha} not read, deadline ${deadlines.verdictMinutes} min: skip`);
-  if (p.verdict !== "none") return none(`#${p.number} (pr) not a factory PR, factory/verdict ${p.verdict} on ${sha}, deadline ${deadlines.verdictMinutes} min: judged or being judged`);
-  const { age, head } = sinceHead(p, `not a factory PR, no factory/verdict on ${sha}`, Date.parse(snap.now), deadlines.verdictMinutes);
+  const verdict = reads.verdict(p);
+  if (verdict === undefined) return none(`#${p.number} (pr) not a factory PR, factory/verdict on ${sha} not read, deadline ${deadlines.verdictMinutes} min: skip`);
+  if (verdict !== "none") return none(`#${p.number} (pr) not a factory PR, factory/verdict ${verdict} on ${sha}, deadline ${deadlines.verdictMinutes} min: judged or being judged`);
+  const { age, head } = sinceHead(p, `not a factory PR, no factory/verdict on ${sha}`, Date.parse(snap.now), deadlines.verdictMinutes, reads.headSince(p));
   if (age !== undefined && age < deadlines.verdictMinutes) return none(`${head}: within deadline`);
   return { subject, action: { type: "relabel", remove: [], add: "agent:review" }, log: `${head}: add agent:review` };
 };
 
 /**
- * No agent on the PR and not parked: the PRs `decidePrMerge` decides, and the
- * ones whose merge state `sweep.ts` reads, so the two cannot disagree. A hold
- * keeps a PR here (#210).
+ * No agent on the PR and not parked: the PRs `decidePrMerge` decides, and so
+ * the ones whose merge state it reads through `reads`. A hold keeps a PR here
+ * (#210).
  */
 export const onMergePath = (labels: readonly string[]): boolean =>
   agentLabels(labels).length === 0 && !PARKED_LABELS.some((l) => labels.includes(l));
@@ -573,9 +608,9 @@ export const onMergePath = (labels: readonly string[]): boolean =>
  * PRs with no agent on them. Any other PR goes to `decideUnjudged` above; a
  * factory PR is unarmed, or judged, or stale behind main, or none of those.
  */
-const decidePrMerge = (p: PrState, snap: Snapshot, deadlines: Deadlines, held: string | undefined, policy: TrustPolicy): Decision | undefined => {
+const decidePrMerge = (p: PrState, snap: Snapshot, deadlines: Deadlines, held: string | undefined, policy: TrustPolicy, reads: MergeReads): Decision | undefined => {
   if (!onMergePath(p.labels)) return undefined;
-  if (!p.factory) return decideUnjudged(p, snap, deadlines, held, policy);
+  if (!p.factory) return decideUnjudged(p, snap, deadlines, held, policy, reads);
   const subject: Subject = { kind: "pr", number: p.number };
   const none = (log: string): Decision => ({ subject, action: { type: "none" }, log });
   const sha = p.headSha.slice(0, 7);
@@ -589,25 +624,27 @@ const decidePrMerge = (p: PrState, snap: Snapshot, deadlines: Deadlines, held: s
   // merge until the reviewer passes it. The deadline keeps the sweep from racing the
   // implement run's own step, which arms it seconds after the PR is opened.
   if (!p.autoMerge) {
-    const { age, head } = sinceHead(p, "factory PR with auto-merge not enabled", now, deadlines.stuckMinutes);
+    const { age, head } = sinceHead(p, "factory PR with auto-merge not enabled", now, deadlines.stuckMinutes, reads.headSince(p));
     if (age !== undefined && age < deadlines.stuckMinutes) return none(`${head}: within deadline`);
     return { subject, action: { type: "arm-auto-merge", pr: p.number }, log: `${head}: re-arm auto-merge` };
   }
 
-  if (p.verdict === undefined) return none(`#${p.number} (pr) auto-merge armed, factory/verdict on ${sha} not read, deadline ${deadlines.verdictMinutes} min: skip`);
-  if (p.verdict === "none") {
-    const { age, head } = sinceHead(p, `auto-merge armed, no factory/verdict on ${sha}`, now, deadlines.verdictMinutes);
+  const verdict = reads.verdict(p);
+  if (verdict === undefined) return none(`#${p.number} (pr) auto-merge armed, factory/verdict on ${sha} not read, deadline ${deadlines.verdictMinutes} min: skip`);
+  if (verdict === "none") {
+    const { age, head } = sinceHead(p, `auto-merge armed, no factory/verdict on ${sha}`, now, deadlines.verdictMinutes, reads.headSince(p));
     if (age !== undefined && age < deadlines.verdictMinutes) return none(`${head}: within deadline`);
     // A hold withholds the reviewer, never the merge path above and below (#210).
     if (held) return none(`${head}: held: ${held}`);
     return { subject, action: { type: "relabel", remove: [], add: "agent:review" }, log: `${head}: add agent:review` };
   }
-  if (p.verdict === "pending") return none(`#${p.number} (pr) auto-merge armed, factory/verdict pending on ${sha}, deadline ${deadlines.verdictMinutes} min: reviewer running`);
-  if (p.verdict !== "success") return none(`#${p.number} (pr) auto-merge armed, factory/verdict ${p.verdict} on ${sha}, deadline ${deadlines.verdictMinutes} min: the retry handler owns it`);
+  if (verdict === "pending") return none(`#${p.number} (pr) auto-merge armed, factory/verdict pending on ${sha}, deadline ${deadlines.verdictMinutes} min: reviewer running`);
+  if (verdict !== "success") return none(`#${p.number} (pr) auto-merge armed, factory/verdict ${verdict} on ${sha}, deadline ${deadlines.verdictMinutes} min: the retry handler owns it`);
 
-  const head = `#${p.number} (pr) ${p.behindBy ?? "?"} behind ${snap.base} with factory/verdict success, deadline ${deadlines.updateMinutes} min`;
-  if (p.behindBy === undefined) return none(`${head}: behind count not read, skip`);
-  if (p.behindBy === 0) return none(`${head}: up to date`);
+  const behindBy = reads.behindBy(p);
+  const head = `#${p.number} (pr) ${behindBy ?? "?"} behind ${snap.base} with factory/verdict success, deadline ${deadlines.updateMinutes} min`;
+  if (behindBy === undefined) return none(`${head}: behind count not read, skip`);
+  if (behindBy === 0) return none(`${head}: up to date`);
   const updates = snap.runs.filter((r) => isUpdateBranchRun(r, snap.base));
   const live = updates.find(isLive);
   if (live) return none(`${head}: update-branch run ${live.id} live`);
@@ -621,7 +658,7 @@ const decidePrMerge = (p: PrState, snap: Snapshot, deadlines: Deadlines, held: s
 };
 
 /** One decision per candidate, in tracker order: tickets, then PRs by label, then PRs by merge state. */
-export const reconcile = (snap: Snapshot, deadlines: Deadlines, policy: TrustPolicy): Decision[] => {
+export const reconcile = (snap: Snapshot, deadlines: Deadlines, policy: TrustPolicy, reads: MergeReads = snapshotReads): Decision[] => {
   const decisions: Decision[] = [];
   for (const t of snap.issues) {
     const d = decideTicket(t, snap, deadlines);
@@ -629,7 +666,7 @@ export const reconcile = (snap: Snapshot, deadlines: Deadlines, policy: TrustPol
   }
   for (const p of snap.prs) {
     const held = heldBy(p.labels, snap.issues.find((t) => t.number === p.closes));
-    const d = decidePrLabel(p, snap, deadlines, held) ?? decidePrMerge(p, snap, deadlines, held, policy);
+    const d = decidePrLabel(p, snap, deadlines, held) ?? decidePrMerge(p, snap, deadlines, held, policy, reads);
     if (d) decisions.push(d);
   }
   return decisions;

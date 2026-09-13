@@ -211,12 +211,42 @@ test("a factory PR with auto-merge off past the deadline is re-armed", () => {
   assert.deepEqual(writes, [{ op: "armAutoMerge", pr: 11 }]);
 });
 
+test("a left-alone PR is decided without a single costly read (frugality, #302)", () => {
+  // The reconciler drives the reads, and it reaches a costly one only past the
+  // branches that would leave a PR alone. A draft PR and one carrying an agent
+  // label are each decided with no verdict, behind-by, commit-date or author read.
+  const reads: string[] = [];
+  const draft = openPr(21, { closes: 5, draft: true }, minutesAgo(45));
+  const labeled = openPr(31, { labels: ["agent:review"], stateSince: minutesAgo(1) }, minutesAgo(45));
+  const { needs, writes } = inMemory({
+    openPrs: () => [draft, labeled],
+    verdict: (sha) => (reads.push(`verdict:${sha.slice(0, 7)}`), "none" as VerdictState),
+    behindBy: () => (reads.push("behindBy"), 0),
+    commitDate: () => (reads.push("commitDate"), ""),
+    ticketAuthor: () => (reads.push("ticketAuthor"), { association: "OWNER", login: "owner" }),
+  });
+  const result = sweep(needs, config());
+  assert.equal(result.aborted, undefined);
+  assert.deepEqual(reads, []);
+  assert.deepEqual(writes, []);
+});
+
 test("a dry run decides but writes nothing", () => {
   const { needs, writes } = inMemory({ openTickets: () => [ticket(1)] });
   const result = sweep(needs, config({ dryRun: true }));
   assert.equal(writes.length, 0);
   // It still decided: the repair is in the result, it was simply not applied.
   assert.equal(result.decisions.filter((d) => d.action.type !== "none").length, 1);
+});
+
+test("a hard merge read that throws aborts the pass and applies nothing (#302)", () => {
+  // The reconciler's own costly reads run inside the sweep's abort path, so a hard
+  // read failing mid-decision aborts the whole pass rather than half-repairing.
+  const ready = openPr(11, { factory: true, autoMerge: true }, minutesAgo(60));
+  const { needs, writes } = inMemory({ openPrs: () => [ready], verdict: throws });
+  const result = sweep(needs, config());
+  assert.match(result.aborted ?? "", /aborted before repairing anything/);
+  assert.deepEqual(writes, []);
 });
 
 /* Soft-fail scenarios: each read the sweep allows to fail leaves the subject alone (acceptance criterion 3). */
