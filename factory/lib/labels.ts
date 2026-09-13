@@ -7,11 +7,14 @@
  * step holds the subject right now), `needs-human` is the factory giving up,
  * and `hold` is a human's instruction to leave a ready ticket alone.
  *
- * Not yet every home. `dispatch/select.ts` still spells `agent:implement` as
- * its own `DISPATCH_LABEL`, and its `FACTORY_STATE_LABELS` is
- * `HANDED_OFF_LABELS` plus `needs-human`. Repointing them is the dispatch
- * half of story 5 of #76 (#122), which owns that file; this module is where
- * they land when it does.
+ * Every home. The sets are here too, not only the strings: what holds a
+ * ticket back (`HOLD_LABELS`), what says an agent already has the subject
+ * (`HANDED_OFF_LABELS`), what the factory has parked (`PARKED_LABELS`), and
+ * what the dispatcher reads as the factory already being on a ticket
+ * (`DISPATCH_LABEL`, `FACTORY_STATE_LABELS`). Each set that overlaps another
+ * is derived from it rather than listed again, so a label added to one
+ * reaches the other; the dispatcher, the reconciler, the heartbeat and
+ * update-branch decide on them and spell none of them (#311).
  *
  * Imports use explicit `.ts` and this module imports nothing, so the dispatch
  * job and the update-branch job can both run it on bare

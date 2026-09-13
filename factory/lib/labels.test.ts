@@ -55,6 +55,16 @@ const LABEL_READERS = [
   "factory/lib/target-repo.ts",
 ];
 
+test("this module imports nothing, so both bare-node cones can reach it", () => {
+  // Two sparse-checkout cones list it and reach it from a pure module, so an
+  // import either of them cannot resolve kills the job with
+  // ERR_MODULE_NOT_FOUND (#50). `strip-types-cone.test.ts` holds the rest of
+  // that wiring; this is the one module whose answer is "none at all", which is
+  // what lets every module above import it without widening a cone.
+  const source = fs.readFileSync(new URL("./labels.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /^\s*(import|export)\b[^\n]*\bfrom\b/m, "lib/labels.ts imports nothing");
+});
+
 test("no module that decides on a label spells one: every label read or written comes from here", () => {
   // The whole point of the module (#311). A literal in one of these is a
   // second home: renaming the label here would leave that module deciding on
@@ -127,6 +137,44 @@ const docPages = (dir = "docs"): string[] => [
   ),
 ];
 
+/**
+ * What a page says, with its code taken out: a markdown page whole, and a
+ * module's comments alone. A claim about where something lives is prose, and
+ * an import line is not one: two adjacent imports sit a few characters apart
+ * and mean nothing about either module's contents.
+ */
+const proseOf = (page: string): string => {
+  const source = fs.readFileSync(new URL(`../../${page}`, import.meta.url), "utf8");
+  if (page.endsWith(".md")) return source;
+  return [...source.matchAll(/\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm)].map((match) => match[0]).join("\n");
+};
+
+/** The label sets that used to live elsewhere, and that a page may still send a reader to the old home for (#311). */
+const MOVED_SETS = ["PARKED_LABELS", "DISPATCH_LABEL", "FACTORY_STATE_LABELS"];
+/** The modules they were defined in, as prose writes a path, with or without its leading directories. */
+const OLD_HOMES = /(?:[\w/.-]*)(?:reconcile|select)\.ts/g;
+
+test("no page sends a reader to a moved label set's old home", () => {
+  // `PARKED_LABELS` was the reconciler's and `DISPATCH_LABEL` the dispatcher's,
+  // and prose held the sets together where the code could not: CONTEXT.md and
+  // update-branch both sent a reader to `dispatch/reconcile.ts` for the parked
+  // pair, and this module's own header called `dispatch/select.ts` the home of
+  // the other two. A reader following that prose after the move finds nothing.
+  for (const page of [...docPages(), ...modules().filter((file) => !file.endsWith(".test.ts"))]) {
+    const prose = proseOf(page);
+    for (const name of MOVED_SETS) {
+      for (const match of prose.matchAll(new RegExp(name, "g"))) {
+        const nearby = prose.slice(Math.max(0, match.index - 200), match.index + 200);
+        const old = [...nearby.matchAll(OLD_HOMES)].map((path) => path[0]!);
+        // Naming the reconciler or the dispatcher beside a set is fine when the
+        // home is named too: that sentence says who reads it, not where it lives.
+        if (old.length === 0 || nearby.includes("labels.ts")) continue;
+        assert.fail(`${page} names ${name} beside ${old.join(", ")}, which is no longer where it lives`);
+      }
+    }
+  }
+});
+
 test("no doc names a hold set: `hold` alone holds a ticket back (#210)", () => {
   // A page still naming `needs-triage` or `ready-for-human` beside it tells a
   // triager they hold, and the dispatcher would dispatch the ticket anyway.
@@ -171,12 +219,9 @@ test("every label the dispatcher decides on is one this repo defines, never one 
   // knowing. `wontfix` is how close it already runs: a GitHub default and one
   // of the five triage roles in `docs/agents/triage-labels.md`, which the
   // dispatcher happens not to read.
-  // Both homes of the factory state strings, not just one: `dispatch/select.ts`
-  // still keeps its own `DISPATCH_LABEL` and `FACTORY_STATE_LABELS` while
-  // `lib/labels.ts` is where they land (#122), and update-branch and the retry
-  // handler read `HANDED_OFF_LABELS` and `ESCALATION_LABEL` rather than either
-  // of those. Naming all of them means the guard holds whichever list a new
-  // label is added to, and survives the repointing that deletes the duplicates.
+  // Every list, not just one: the sets overlap and are derived from each
+  // other, but a new label joins exactly one of them, so naming all of them is
+  // what makes the guard hold wherever it is added.
   const read = [
     READY_LABEL,
     ...HOLD_LABELS,

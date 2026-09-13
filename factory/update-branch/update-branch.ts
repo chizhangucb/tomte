@@ -205,7 +205,7 @@ export const updateBranch = async (
    * The label is what makes a tell-author's decline stick: every push to main
    * runs this job again with the conflict still there, and the reconciler
    * re-arms a Factory PR carrying no `agent:*` label at its verdict deadline
-   * (`PARKED_LABELS` in `factory/dispatch/reconcile.ts`). Auto-merge and the
+   * (`PARKED_LABELS` in `factory/lib/labels.ts`). Auto-merge and the
    * update half are left as they are: neither asks who opened a PR, so the
    * branch is brought up to date again the moment the conflict is gone.
    */

@@ -88,7 +88,7 @@ A ticket or PR the factory has stopped on because something a person has to deal
 _Avoid_: blocked on its own (the tracker's dependency word, so prose writes `agent:blocked`), stuck (the reconciler's word for a subject with no live run), failed.
 
 **Parked**:
-A ticket or PR the factory has stopped on and no sweep repairs: the `agent:blocked` and `needs-human` pair, `PARKED_LABELS` in `factory/dispatch/reconcile.ts`. Always the factory's own doing, which is what separates it from a **hold**, and the way the factory stops touching something without closing it.
+A ticket or PR the factory has stopped on and no sweep repairs: the `agent:blocked` and `needs-human` pair, `PARKED_LABELS` in `factory/lib/labels.ts`. Always the factory's own doing, which is what separates it from a **hold**, and the way the factory stops touching something without closing it.
 _Avoid_: held (a hold is a person choosing the timing), stalled, abandoned.
 
 **Hold**:
