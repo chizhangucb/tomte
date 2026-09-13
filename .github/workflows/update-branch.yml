@@ -72,6 +72,9 @@ jobs:
         env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.FACTORY_PAT }}
+          # The reading/status key under both names during the rename (#282): READ_TOKEN
+          # is the settled name, STATUS_TOKEN the old one it replaces, dropped by #288.
+          READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           STATUS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

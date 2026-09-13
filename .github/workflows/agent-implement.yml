@@ -411,6 +411,9 @@ jobs:
     env:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Reading-key alias for the rename (#282): the handler's checks and Actions reads use it
+      # once retry is wired to the module (#284); GH_TOKEN, the old name, is kept until #288.
+      READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
