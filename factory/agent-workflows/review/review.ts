@@ -41,6 +41,7 @@ import {
   fetchPullRequestContext,
   noCriteriaReason,
 } from "../shared/review-context";
+import { prContextRepo } from "../../lib/pr-context-repo";
 import { trustPolicyFromEnv } from "../../lib/trusted-authors";
 import {
   filterInlineComments,
@@ -61,6 +62,8 @@ import {
 } from "../../lib/verdict";
 
 const PR_NUMBER = required("PR_NUMBER");
+/** The target as `owner/repo`, the address the PR-context reads are made against. */
+const GH_REPO = required("GH_REPO");
 const BRANCH = required("BRANCH");
 const BRANCH_HEAD_SHA = required("BRANCH_HEAD_SHA");
 const REVIEWER_MODEL = required("REVIEWER_MODEL");
@@ -126,7 +129,7 @@ await runAgentWorkflow(
     // and passed down, so nothing between here and the prompt can widen it.
     const policy = trustPolicyFromEnv();
     console.log(`Trusted authors: ${policy.associations.join(", ")}.`);
-    const context = fetchPullRequestContext(PR_NUMBER, policy);
+    const context = fetchPullRequestContext(prContextRepo(GH_REPO), PR_NUMBER, policy);
     console.log(describeDropped(context.dropped));
     const criteria = parseAcceptanceCriteria(context.issueBody);
     const { model } = resolveRoleModel("reviewer", REVIEWER_MODEL);
