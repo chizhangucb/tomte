@@ -6,15 +6,16 @@
  * writes are `retry.ts`'s; this file is the wiring, as `sweep-run.ts` is for the
  * sweep.
  *
- * Two tokens, unchanged until #282: reads (statuses, check runs, run logs and
- * artifacts, labels) use GH_TOKEN, the job's GITHUB_TOKEN, which needs
- * checks: read and actions: read from the caller; writes (labels, comments,
- * closing the PR) use FACTORY_PAT so the labels fire events. The token choice
- * lives in `target-repo.ts` for the record's calls; the checks wait's reads
- * below use GH_TOKEN directly.
+ * Two keys (#282): the record's reads (a PR, the open PR list, labels, the
+ * branch, the artifact) use the reading key (READ_TOKEN, falling back to the
+ * old GH_TOKEN until #288), which needs checks: read and actions: read from the
+ * caller; its writes (labels, comments, closing the PR) use the writing key
+ * (FACTORY_PAT) so the labels fire events. The choice lives in `target-repo.ts`
+ * (`resolveKeys`); the checks wait's own reads below still use GH_TOKEN
+ * directly, seamed with the rest of the wait in #285.
  *
- * Env: GH_REPO, GH_TOKEN, FACTORY_PAT, BRANCH, RUN_URL, OUTPUT_DIR, one of
- * ISSUE_NUMBER or PR_NUMBER, and FAILURE_KIND:
+ * Env: GH_REPO, READ_TOKEN (or GH_TOKEN), FACTORY_PAT, BRANCH, RUN_URL,
+ * OUTPUT_DIR, one of ISSUE_NUMBER or PR_NUMBER, and FAILURE_KIND:
  * - `implement`: the implementer's attempt ended badly; the output is
  *   OUTPUT_DIR/failure_reason.txt plus the tail of the newest run log.
  *   OUTPUT_DIR/rate_limited.txt present means every account was rate limited.

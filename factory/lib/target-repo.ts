@@ -305,17 +305,11 @@ export const dispatchNeeds = (repo: string): DispatchNeeds => {
  * injected one. They stay in `retry-run.ts` until then.
  */
 export const retryTargetRepo = (repo: string, branch: string) => {
-  // Writes fire label events only under FACTORY_PAT; the job's GH_TOKEN cannot.
-  const writeEnv = { ...process.env, GH_TOKEN: process.env.FACTORY_PAT, GITHUB_TOKEN: process.env.FACTORY_PAT };
-
-  const ghJson = (args: string[]): any => {
-    const out = gh(args);
-    try {
-      return JSON.parse(out);
-    } catch {
-      throw new GhError(args, new Error(`printed something other than JSON: ${out.slice(0, 200)}`));
-    }
-  };
+  // The same two keys the sweep and update-branch resolve (#282): reads (a PR,
+  // the open PR list, labels, the branch, the artifact) use the reading key,
+  // writes (labels, comments, close, disarm) the writing one. The retry step
+  // now passes READ_TOKEN, so its reads no longer ride the writing key.
+  const { writeEnv, readEnv } = resolveKeys();
 
   // Structurally `retry.ts`'s `Subject`, named once here rather than re-inlined
   // per call. Not imported: `decide.ts`, where `Subject` lives, is not on the
@@ -326,22 +320,22 @@ export const retryTargetRepo = (repo: string, branch: string) => {
   };
 
   return {
-    viewPr: (number: string) => ghJson(["pr", "view", number, "--repo", repo, "--json", "state,body,headRefName"]),
+    viewPr: (number: string) => ghJson(["pr", "view", number, "--repo", repo, "--json", "state,body,headRefName"], readEnv),
     openPrs: () =>
-      ghJson(["pr", "list", "--repo", repo, "--state", "open", "--limit", "200", "--json", "number,body,headRefName,isCrossRepository"]),
-    labelsOf: (on: Named) => ghJson([on.kind, "view", on.number, "--repo", repo, "--json", "labels", "--jq", "[.labels[].name]"]),
+      ghJson(["pr", "list", "--repo", repo, "--state", "open", "--limit", "200", "--json", "number,body,headRefName,isCrossRepository"], readEnv),
+    labelsOf: (on: Named) => ghJson([on.kind, "view", on.number, "--repo", repo, "--json", "labels", "--jq", "[.labels[].name]"], readEnv),
     // Throws GhError on any read failure, a missing branch (404) among them; the
     // handler's `safeBranchExists` shrugs each off and reads the branch as gone,
     // as the pre-seam `tryGh` did.
     branchExists: (): boolean => {
-      gh(["api", `repos/${repo}/branches/${branch}`, "--jq", ".name"]);
+      gh(["api", `repos/${repo}/branches/${branch}`, "--jq", ".name"], readEnv);
       return true;
     },
     artifactUrl: (): string | undefined => {
       const name = process.env.ARTIFACT_NAME;
       const runId = process.env.GITHUB_RUN_ID;
       if (!name || !runId) return undefined;
-      const id = gh(["api", `repos/${repo}/actions/runs/${runId}/artifacts`, "--jq", `.artifacts[] | select(.name == "${name}") | .id`]).trim();
+      const id = gh(["api", `repos/${repo}/actions/runs/${runId}/artifacts`, "--jq", `.artifacts[] | select(.name == "${name}") | .id`], readEnv).trim();
       return id ? `https://github.com/${repo}/actions/runs/${runId}/artifacts/${id}` : undefined;
     },
     addLabel: (on: Named, label: string) => edit(on, ["--add-label", label]),
