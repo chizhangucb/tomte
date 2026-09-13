@@ -117,7 +117,7 @@ test("the PR read asks for the title, body and comments the context is built fro
   assert.equal(pr.title, "Add a helper");
   assert.equal(pr.body, "Closes #4");
   assert.deepEqual(pr.comments.map((comment) => comment.authorAssociation), ["OWNER"]);
-  assert.deepEqual(asked(), ["gh pr view 12 --json title,body,comments"]);
+  assert.deepEqual(asked(), [`gh pr view 12 --repo ${REPO} --json title,body,comments`]);
 });
 
 /** Both halves of the ticket, from the two reads that each carry one (#179). */
@@ -127,15 +127,15 @@ test("the ticket read brings back its labels and, from REST, whoever opened it",
   assert.deepEqual(read.view.labels, [{ name: "model:claude-sonnet-5" }]);
   assert.deepEqual(read.author, { association: "OWNER", login: "chi" });
   assert.deepEqual(asked(), [
-    "gh issue view 4 --json number,title,body,comments,labels",
-    "gh api repos/{owner}/{repo}/issues/4",
+    `gh issue view 4 --repo ${REPO} --json number,title,body,comments,labels`,
+    `gh api repos/${REPO}/issues/4`,
   ]);
 });
 
 test("the reviews read is the REST list of submitted reviews on the PR", () => {
   const reviews = prContextRepo(REPO).reviews("12");
   assert.deepEqual(reviews.map((review) => review.author_association), ["OWNER"]);
-  assert.deepEqual(asked(), ["gh api repos/{owner}/{repo}/pulls/12/reviews"]);
+  assert.deepEqual(asked(), [`gh api repos/${REPO}/pulls/12/reviews`]);
 });
 
 /** The threads, and the target they are asked for: the record's own, not an env read of its own. */

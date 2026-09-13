@@ -20,6 +20,14 @@
  * `lib/gh.ts` throws, so a body that could not be read reaches nobody as "this
  * ticket has no criteria".
  *
+ * Every read names the repo it is made against, the way each factory in
+ * `target-repo.ts` does: `--repo` on a `gh` subcommand, the address spelled out
+ * in a REST path, and GraphQL's two variables split off it. The vendored fetch
+ * left four of the five to gh's own ambient resolution (`{owner}/{repo}` and a
+ * bare `pr view`, which follow `GH_REPO` or the checkout's remote) while
+ * addressing the GraphQL read from `GH_REPO` itself, so a record built for one
+ * target and a process pointed at another would have read two.
+ *
  * Imported with bare specifiers and free to import a package: no strip-types
  * entrypoint reaches this module (`lib/strip-types-cone.test.ts` lists them),
  * the three workflows that build the record installing the engine first. A
@@ -30,7 +38,6 @@ import { safeSh, sh } from "./sh";
 import type {
   LinkedIssueRead,
   PrContextNeeds,
-  PullRequestComment,
   PullRequestReview,
   PullRequestReviewThread,
   PullRequestView,
@@ -82,12 +89,12 @@ query($owner:String!,$repo:String!,$number:Int!) {
  * Both throw on an API error, since a missing body must never read as "no
  * criteria", and a missing author must never read as a trusted one.
  */
-const readLinkedIssue = (issueNumber: string): LinkedIssueRead => {
+const readLinkedIssue = (repoAddress: string, issueNumber: string): LinkedIssueRead => {
   const view = JSON.parse(
-    gh(["issue", "view", issueNumber, "--json", "number,title,body,comments,labels"]),
+    gh(["issue", "view", issueNumber, "--repo", repoAddress, "--json", "number,title,body,comments,labels"]),
   ) as IssueView;
   const rest = JSON.parse(
-    gh(["api", `repos/{owner}/{repo}/issues/${issueNumber}`]),
+    gh(["api", `repos/${repoAddress}/issues/${issueNumber}`]),
   ) as {
     author_association?: string | null;
     user?: { login?: string | null } | null;
@@ -143,14 +150,14 @@ const readReviewThreads = (
 export const prContextRepo = (repoAddress: string): PrContextNeeds => ({
   pr: (prNumber) =>
     JSON.parse(
-      gh(["pr", "view", prNumber, "--json", "title,body,comments"]),
-    ) as PullRequestView & { comments: PullRequestComment[] },
+      gh(["pr", "view", prNumber, "--repo", repoAddress, "--json", "title,body,comments"]),
+    ) as PullRequestView,
 
-  linkedIssue: readLinkedIssue,
+  linkedIssue: (issueNumber) => readLinkedIssue(repoAddress, issueNumber),
 
   reviews: (prNumber) =>
     JSON.parse(
-      gh(["api", `repos/{owner}/{repo}/pulls/${prNumber}/reviews`]),
+      gh(["api", `repos/${repoAddress}/pulls/${prNumber}/reviews`]),
     ) as PullRequestReview[],
 
   reviewThreads: (prNumber) => readReviewThreads(repoAddress, prNumber),
