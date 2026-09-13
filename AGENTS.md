@@ -4,3 +4,4 @@
 - **Naming a domain concept**, in a ticket title, a test name, a proposal, a commit message: `CONTEXT.md` is the glossary and `docs/adr/` holds the decisions. Read them as `docs/agents/domain.md` says, and flag an output that contradicts an ADR.
 - **Creating, reading, labelling or closing a ticket, or writing a ticket or PR body**: GitHub Issues on `chizhangucb/tomte`, driven with `gh` as `docs/agents/issue-tracker.md` says.
 - **Applying a triage label or `hold`**: `docs/agents/triage-labels.md` maps each to this repo's label.
+- **Opening a pull request yourself**: your branch has to be in this repo, not a fork. Put `Closes #N` in the body, label it `agent:review`, and arm auto-merge. All three, or it stays blocked. The factory judges it and merges it.
