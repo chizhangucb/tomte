@@ -7,7 +7,6 @@ import {
   leftAlone,
   NO_TICKET_MARK,
   onMergePath,
-  PARKED_LABELS,
   type PrState,
   type Run,
   type Snapshot,
@@ -23,6 +22,7 @@ import {
   ticketFromGitHub,
   toldNoTicketIn,
 } from "./reconcile.ts";
+import { PARKED_LABELS } from "../lib/labels.ts";
 import { trustPolicy } from "../lib/trusted-authors.ts";
 
 const NOW = "2026-09-07T20:00:00Z";

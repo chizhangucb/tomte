@@ -17,9 +17,8 @@ import * as fs from "node:fs";
 import { test } from "node:test";
 
 import { PROJECTIONS } from "../dispatch/gh-read.ts";
-import { DEFAULT_DEADLINES, PARKED_LABELS } from "../dispatch/reconcile.ts";
-import { FACTORY_STATE_LABELS } from "../dispatch/select.ts";
-import { HOLD_LABELS, IMPLEMENT_LABEL, READY_LABEL } from "../lib/labels.ts";
+import { DEFAULT_DEADLINES } from "../dispatch/reconcile.ts";
+import { FACTORY_STATE_LABELS, HOLD_LABELS, IMPLEMENT_LABEL, PARKED_LABELS, READY_LABEL } from "../lib/labels.ts";
 import { HEARTBEAT_INTERVAL_MINUTES } from "./interval.ts";
 import { type OpenSubject, fromGitHub, openWorkArgs, sweepNeed } from "./work.ts";
 
@@ -286,9 +285,9 @@ test("the daily recheck wakes a held pull request but never a held ticket, a par
 });
 
 test("the deadlines are the reconciler's own, restated nowhere here", () => {
-  // The tie `PARKED_LABELS` already travels, for the same reason: a heartbeat
-  // carrying its own copy of a deadline would agree with itself forever while
-  // the reconciler moved.
+  // The tie `PARKED_LABELS` already travels from `factory/lib/labels.ts`, for
+  // the same reason: a heartbeat carrying its own copy of a deadline would
+  // agree with itself forever while the reconciler moved.
   const source = fs.readFileSync(new URL("./work.ts", import.meta.url), "utf8");
   for (const [name, value] of Object.entries(DEFAULT_DEADLINES)) {
     assert.doesNotMatch(source, new RegExp(`\\b${value}\\b`), `${name} is ${value}, which is written out in work.ts rather than imported`);

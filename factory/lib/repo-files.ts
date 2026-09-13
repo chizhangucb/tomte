@@ -9,6 +9,7 @@
  * every file in the tree.
  */
 import * as fs from "node:fs";
+import * as nodePath from "node:path";
 
 /** The roots worth scanning: the pages a maintainer or an agent reads, what a target copies, the code. */
 const REPO_ROOTS = ["README.md", "CONTEXT.md", "AGENTS.md", "CLAUDE.md", "docs", "templates", "scripts", "factory", ".github"];
@@ -26,3 +27,28 @@ export const repoFiles = (): string[] => REPO_ROOTS.flatMap((root) => walk(root,
 
 /** Every file under the roots, test files included. */
 export const allRepoFiles = (): string[] => REPO_ROOTS.flatMap((root) => walk(root, () => true));
+
+/** Every TypeScript module under `factory/`, repo-relative; the `.test.ts` files only when `tests` asks for them. */
+export const factoryModules = ({ tests }: { tests: boolean }): string[] =>
+  (tests ? allRepoFiles() : repoFiles()).filter((file) => file.startsWith("factory/") && file.endsWith(".ts"));
+
+/**
+ * A module's source with its comments blanked, so a doc comment that names a
+ * function is not read as a call to it and one that names a label is not read
+ * as the module spelling that label.
+ */
+export const codeOf = (module: string): string =>
+  fs
+    .readFileSync(new URL(`../../${module}`, import.meta.url), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|\s)\/\/.*$/gm, "$1");
+
+/** The repo-relative module `module` imports `name` from, by that name and unaliased, or undefined. */
+export const importedFrom = (module: string, name: string): string | undefined => {
+  for (const [, names, from] of codeOf(module).matchAll(/import\s*\{([^}]*)\}\s*from\s*"([^"]+)"/g)) {
+    if (names!.split(",").some((n) => n.trim().replace(/^type\s+/, "") === name)) {
+      return nodePath.posix.join(nodePath.posix.dirname(module), from!);
+    }
+  }
+  return undefined;
+};

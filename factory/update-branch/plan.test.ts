@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { PARKED_LABELS } from "../dispatch/reconcile.ts";
 import { FACTORY_BODY_MARKER } from "../lib/factory-pr.ts";
 import { GhError } from "../lib/gh.ts";
-import { BLOCKED_LABEL, IMPLEMENT_LABEL } from "../lib/labels.ts";
+import { BLOCKED_LABEL, IMPLEMENT_LABEL, PARKED_LABELS } from "../lib/labels.ts";
 import {
   type CommitStatus,
   type ConflictSubject,
@@ -111,7 +110,7 @@ test("the author is told once: agent:blocked is what the caller adds, and it ski
   // The decline has to stick. update-branch runs again on every push to main and the
   // conflict is still there, so without the label the comment would repeat; and the
   // reconciler re-arms a Factory PR with no agent:* label at its verdict deadline.
-  // agent:blocked is in HANDED_OFF_LABELS and in the reconciler's PARKED_LABELS, so
+  // agent:blocked is in HANDED_OFF_LABELS and in PARKED_LABELS, so
   // the same label answers both, and the author removing it hands the PR back.
   assert.equal(planConflict(theirs()).action, "tell-author");
   assert.equal(planConflict(theirs([BLOCKED_LABEL])).action, "skip");

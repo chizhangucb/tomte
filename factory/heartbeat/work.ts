@@ -27,9 +27,8 @@
  * `node --experimental-strip-types`.
  */
 import { PROJECTIONS } from "../dispatch/gh-read.ts";
-import { DEFAULT_DEADLINES, PARKED_LABELS } from "../dispatch/reconcile.ts";
-import { FACTORY_STATE_LABELS } from "../dispatch/select.ts";
-import { HOLD_LABELS, READY_LABEL } from "../lib/labels.ts";
+import { DEFAULT_DEADLINES } from "../dispatch/reconcile.ts";
+import { FACTORY_STATE_LABELS, HOLD_LABELS, PARKED_LABELS, READY_LABEL } from "../lib/labels.ts";
 import { HEARTBEAT_INTERVAL_MINUTES } from "./interval.ts";
 
 /** One open ticket or pull request, reduced to what the rules read. */

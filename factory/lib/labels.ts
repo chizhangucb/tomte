@@ -7,11 +7,14 @@
  * step holds the subject right now), `needs-human` is the factory giving up,
  * and `hold` is a human's instruction to leave a ready ticket alone.
  *
- * Not yet every home. `dispatch/select.ts` still spells `agent:implement` as
- * its own `DISPATCH_LABEL`, and its `FACTORY_STATE_LABELS` is
- * `HANDED_OFF_LABELS` plus `needs-human`. Repointing them is the dispatch
- * half of story 5 of #76 (#122), which owns that file; this module is where
- * they land when it does.
+ * Every home. The sets are here too, not only the strings: what holds a
+ * ticket back (`HOLD_LABELS`), what says an agent already has the subject
+ * (`HANDED_OFF_LABELS`), what the factory has parked (`PARKED_LABELS`), and
+ * what the dispatcher reads as the factory already being on a ticket
+ * (`DISPATCH_LABEL`, `FACTORY_STATE_LABELS`). Each set that overlaps another
+ * is derived from it rather than listed again, so a label added to one
+ * reaches the other; the dispatcher, the reconciler, the heartbeat and
+ * update-branch decide on them and spell none of them (#311).
  *
  * Imports use explicit `.ts` and this module imports nothing, so the dispatch
  * job and the update-branch job can both run it on bare
@@ -61,6 +64,23 @@ export const BLOCKED_LABEL = "agent:blocked";
 export const IN_PROGRESS_LABEL = "agent:in-progress";
 
 /**
+ * Hand the PR to the reviewer. A producer labels its own PR with it to ask for
+ * a verdict (ADR 0007), the implement run adds it when it has opened the PR,
+ * and the reconciler re-adds it on a PR whose review run was lost or whose
+ * head has gone unjudged past the deadline.
+ */
+export const REVIEW_LABEL = "agent:review";
+
+/**
+ * The factory's own pair: a subject the factory has stopped on and no sweep
+ * repairs. The reconciler reports such a subject and leaves it alone, the
+ * heartbeat counts it as nothing waiting, and update-branch neither re-arms
+ * nor updates its PR. Always the factory's doing, which is what separates it
+ * from a `hold`, a person choosing the timing (CONTEXT.md).
+ */
+export const PARKED_LABELS: readonly string[] = [BLOCKED_LABEL, ESCALATION_LABEL];
+
+/**
  * Labels that stop an agent starting, read from here by the dispatcher, the
  * retry handler (`findHold`) and the reconciler so they cannot disagree. `hold`
  * alone since #210.
@@ -68,7 +88,25 @@ export const IN_PROGRESS_LABEL = "agent:in-progress";
 export const HOLD_LABELS: readonly string[] = [HOLD_LABEL];
 
 /** Labels that say an agent already holds the subject (implementer or reviewer, running or queued) or that it is parked. */
-export const HANDED_OFF_LABELS: readonly string[] = [IMPLEMENT_LABEL, IN_PROGRESS_LABEL, "agent:review", BLOCKED_LABEL];
+export const HANDED_OFF_LABELS: readonly string[] = [IMPLEMENT_LABEL, IN_PROGRESS_LABEL, REVIEW_LABEL, BLOCKED_LABEL];
+
+/**
+ * The label the dispatcher adds to dispatch a ticket. The implementer's own
+ * label under the name the dispatcher's log and its tests call it by: one
+ * string, so the label a ticket is dispatched with is the label the workflow
+ * that starts on it listens for.
+ */
+export const DISPATCH_LABEL = IMPLEMENT_LABEL;
+
+/**
+ * The factory already holds this ticket or PR in some state, so no agent is
+ * started on it afresh: the dispatcher skips such a ticket and the heartbeat
+ * counts it as work the sweep owns. Derived from the set above rather than
+ * listed again, so a label handed to an agent is a label the dispatcher knows
+ * the factory is on; `needs-human` joins them because an escalated subject is
+ * the factory's state too, the one a human answers.
+ */
+export const FACTORY_STATE_LABELS: readonly string[] = [...HANDED_OFF_LABELS, ESCALATION_LABEL];
 
 /**
  * The two namespaces the factory writes labels in. A target's caller drops

@@ -30,8 +30,6 @@
  * and no agent touches the branch.
  */
 import assert from "node:assert/strict";
-import * as fs from "node:fs";
-import * as path from "node:path";
 import { test } from "node:test";
 
 import { prEscalation } from "../retry/escalation.ts";
@@ -42,8 +40,7 @@ import {
   isFactoryPr,
   VERDICT_SECTION_START,
 } from "./factory-pr.ts";
-
-const repoRoot = new URL("../../", import.meta.url);
+import { codeOf, factoryModules, importedFrom } from "./repo-files.ts";
 
 /**
  * The modules excluded from the "who asks the predicate" scan below, because
@@ -100,31 +97,6 @@ const PRS: readonly { pr: FactoryPrFacts; authored: boolean }[] = [
 
 const siteKey = (module: string, site: string): string => `${module}#${site}`;
 
-/** Every non-test TypeScript module under `factory/`, repo-relative. */
-const factoryModules = (dir = "factory"): string[] =>
-  fs.readdirSync(new URL(`${dir}/`, repoRoot), { withFileTypes: true }).flatMap((entry) => {
-    const rel = `${dir}/${entry.name}`;
-    if (entry.isDirectory()) return entry.name === "node_modules" ? [] : factoryModules(rel);
-    return entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts") ? [rel] : [];
-  });
-
-/** Source with its comments blanked, so a doc comment that names a function is not read as a call. */
-const codeOf = (module: string): string =>
-  fs
-    .readFileSync(new URL(module, repoRoot), "utf8")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|\s)\/\/.*$/gm, "$1");
-
-/** The repo-relative module `module` imports `name` from, by that name and unaliased, or undefined. */
-const importedFrom = (module: string, name: string): string | undefined => {
-  for (const [, names, from] of codeOf(module).matchAll(/import\s*\{([^}]*)\}\s*from\s*"([^"]+)"/g)) {
-    if (names!.split(",").some((n) => n.trim().replace(/^type\s+/, "") === name)) {
-      return path.posix.join(path.posix.dirname(module), from!);
-    }
-  }
-  return undefined;
-};
-
 /** The first line of a top-level statement: flush left, and not a bracket or backtick closing the one above it. */
 const STATEMENT_START = /^[^\s)\]}>`].*/gm;
 
@@ -142,7 +114,7 @@ const siteOf = (statementStart: string): string =>
 /** Every module under `factory/` that could call the predicate, mapped to its code. */
 const treeCodes = (): Record<string, string> =>
   Object.fromEntries(
-    factoryModules()
+    factoryModules({ tests: false })
       .filter((module) => !DECISION_MODULES.includes(module))
       .map((module) => [module, codeOf(module)]),
   );
