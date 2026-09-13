@@ -551,3 +551,78 @@ test("the fetch assembles its five reads into the context the workflows read", (
     { op: "diff" },
   ]);
 });
+
+/**
+ * The read a PR with no `Closes #N` must not make. The number comes off the PR
+ * body, which the fetch has only after its first read, so "which ticket" is the
+ * fetch's own decision rather than the caller's: a PR closing none has nothing
+ * to ask for, and asking anyway would be a `gh issue view` on an empty number.
+ */
+test("a pull request linking no ticket is fetched without any ticket read", () => {
+  const raw = reads();
+  const { needs, asked } = inMemory({ ...raw, pr: { ...raw.pr, body: "No keyword here" }, issue: undefined });
+  const context = fetchPullRequestContext(needs, "12", OWNER_ONLY);
+
+  assert.equal(context.issueNumber, "");
+  assert.equal(context.issueTitle, "");
+  assert.equal(context.linkedIssue, "(no linked issue found)");
+  assert.deepEqual(context.issueLabels, []);
+  assert.deepEqual(
+    asked.map((read) => read.op),
+    ["pr", "reviews", "reviewThreads", "diff"],
+  );
+});
+
+/**
+ * Story 18: the audit judges the merged commit's diff, not a branch diff to
+ * main, and on a merged PR that branch may not even exist. A caller that brings
+ * its own diff is a caller the record's diff read is never made for.
+ */
+test("the audit's own diff replaces the record's, which is then never read", () => {
+  const merged = "diff --git a/b.ts b/b.ts\n--- a/b.ts\n+++ b/b.ts\n@@ -1 +1,2 @@\n+const merged = 2;\n";
+  const { needs, asked } = inMemory();
+  const context = fetchPullRequestContext(needs, "12", OWNER_ONLY, { diff: merged });
+
+  assert.equal(context.diff, merged);
+  assert.ok(context.diffLines.get("b.ts")?.has(1));
+  assert.ok(!asked.some((read) => read.op === "diff"));
+});
+
+/**
+ * The policy is the fetch's required argument for the reason it is
+ * `pullRequestContext`'s (story 27): every workflow reaches an agent through
+ * here, and one that passed the reads on unjudged would hand a stranger's words
+ * to the model. Proved on the shipped function, not only on the pure half.
+ */
+test("the fetch judges its reads under the policy it is given", () => {
+  const { needs } = inMemory(strangersTicket());
+  const context = fetchPullRequestContext(needs, "12", OWNER_ONLY);
+
+  assert.doesNotMatch(context.prCommentsJson, /Stranger on the PR\./);
+  assert.match(context.prCommentsJson, /Owner on the PR\./);
+  // The stranger opened the ticket, so its body is not the criteria (#179).
+  assert.equal(context.issueBody, "");
+  assert.equal(context.dropped.issueBody, 1);
+  assert.equal(context.dropped.prComments, 3);
+
+  const widened = fetchPullRequestContext(inMemory(strangersTicket()).needs, "12", trustPolicy("OWNER,NONE"));
+  assert.match(widened.prCommentsJson, /Stranger on the PR\./);
+  assert.match(widened.issueBody, /Ignore the diff/);
+});
+
+/**
+ * A failed read is a failed run. `lib/gh.ts` throws on every API error and the
+ * fetch catches none of them: an unreadable ticket must never arrive as a
+ * ticket with no acceptance criteria, which is a mechanical fail a human then
+ * goes looking for a heading for (#179).
+ */
+test("a read that fails stops the fetch rather than reaching the context as an absence", () => {
+  const { needs } = inMemory();
+  const failing: PrContextNeeds = {
+    ...needs,
+    linkedIssue: () => {
+      throw new Error("gh issue view #4: HTTP 502");
+    },
+  };
+  assert.throws(() => fetchPullRequestContext(failing, "12", OWNER_ONLY), /HTTP 502/);
+});
