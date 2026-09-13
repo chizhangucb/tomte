@@ -301,8 +301,9 @@ export const dispatchNeeds = (repo: string): DispatchNeeds => {
  * `GhError`; which of those the handler shrugs off is its own policy.
  *
  * The checks wait's reads (the head's statuses and check runs, a PR's
- * mergeability) are not here: they carry a clock, and #285 seams them with an
- * injected one. They stay in `retry-run.ts` until then.
+ * mergeability) are not here: they build the checks-path failure, which
+ * `retry-run.ts` assembles into a `ChecksNeeds` record for `waitForChecks`
+ * (#285). They stay in `retry-run.ts`, beside the log and artifact reads.
  */
 export const retryTargetRepo = (repo: string, branch: string) => {
   // The same two keys the sweep and update-branch resolve (#282): reads (a PR,

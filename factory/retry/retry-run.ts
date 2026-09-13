@@ -12,7 +12,7 @@
  * caller; its writes (labels, comments, closing the PR) use the writing key
  * (FACTORY_PAT) so the labels fire events. The choice lives in `target-repo.ts`
  * (`resolveKeys`); the checks wait's own reads below still use GH_TOKEN
- * directly, seamed with the rest of the wait in #285.
+ * directly through the shared `gh`, their own token choice left to a later ticket.
  *
  * Env: GH_REPO, READ_TOKEN (or GH_TOKEN), FACTORY_PAT, BRANCH, RUN_URL,
  * OUTPUT_DIR, one of ISSUE_NUMBER or PR_NUMBER, and FAILURE_KIND:
@@ -26,8 +26,10 @@
  *   checks to settle (CHECKS_TIMEOUT_MINUTES, default 15), or for GitHub to
  *   report the PR conflicting, then fail on any failing status or check run.
  * Optional: ARTIFACT_NAME for the log link, GITHUB_RUN_ID and GITHUB_WORKFLOW
- * (set by the runner) to ignore the factory's own check runs. The checks wait's
- * clock and reads move behind the record with an injected clock in #285.
+ * (set by the runner) to ignore the factory's own check runs. The wait loop
+ * itself is `retry.ts`'s `waitForChecks`, driven through a `ChecksNeeds` record
+ * this file assembles from the reads and clock below (#285); the log and
+ * artifact reads that build a failure's output stay here.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -46,10 +48,6 @@ import {
   type MergeGateArtifact,
   renderMergeGateOutput,
   runIdFromUrl,
-  stillPendingReason,
-  summariseFailures,
-  unretryableReason,
-  waitOver,
 } from "./checks";
 import {
   isImplementerFailure,
@@ -58,6 +56,8 @@ import {
   RATE_LIMITED_REASON,
 } from "./decide.ts";
 import {
+  type ChecksNeeds,
+  type ChecksWait,
   type Failure,
   type OpenPr,
   type PrMergeability,
@@ -65,6 +65,7 @@ import {
   type RetryNeeds,
   main,
   resolveTarget,
+  waitForChecks,
 } from "./retry.ts";
 
 const REPO = required("GH_REPO");
@@ -82,7 +83,7 @@ const LOG_LIMITS = { head: 2_000, tail: 8_000 };
 
 const readIf = (file: string): string | undefined => (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : undefined);
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 const ghJson = <T>(args: string[]): T => JSON.parse(gh(args)) as T;
 
@@ -237,40 +238,29 @@ const failureOutput = async (f: CheckFailure): Promise<string> => {
   return `## ${f.name}: ${f.kind} failure${f.description ? ` (${f.description})` : ""}\n${f.url ?? ""}\n\n${detail}`;
 };
 
-/**
- * Wait for the head's checks to settle, or for GitHub to report the open PR
- * conflicting (#145), then the failures among them. `waitOver` is the rule;
- * this is the clock and the reads (seamed with an injected clock in #285).
- */
-const checksFailure = async (pr: OpenPr | undefined): Promise<Failure | undefined> => {
-  const sha = required("HEAD_SHA");
-  const deadline = Date.now() + CHECKS_TIMEOUT_MS;
-  const observe = () => {
-    const state = headChecks(sha);
-    const mergeability = pr && state.pending.length > 0 ? mergeabilityOf(pr) : undefined;
-    return { state, mergeability };
-  };
-  let seen = observe();
-  while (!waitOver(seen.state, seen.mergeability?.mergeable) && Date.now() < deadline) {
-    console.log(`Waiting for ${seen.state.pending.join(", ")} on ${sha.slice(0, 7)}.`);
-    await sleep(POLL_MS);
-    seen = observe();
-  }
-  const { state, mergeability } = seen;
-  const stillPending = stillPendingReason(state, mergeability?.mergeable, CHECKS_TIMEOUT_MS / 60_000);
-  if (stillPending) return { kind: "ci", summary: stillPending, output: "", requeue: stillPending, mergeability };
-  const { failures } = state;
-  if (failures.length === 0) return undefined;
+/** Every failing check's output, joined the way a retry marker comment carries it. */
+const failuresOutput = async (failures: readonly CheckFailure[]): Promise<string> => {
   const parts: string[] = [];
   for (const f of failures) parts.push(await failureOutput(f));
-  const first = failures[0] as CheckFailure;
-  return {
-    kind: first.kind,
-    summary: summariseFailures(failures),
-    output: parts.join("\n\n"),
-    unretryable: unretryableReason(failures),
-  };
+  return parts.join("\n\n");
 };
+
+/**
+ * The wait for a head's checks, wired to GitHub (#285): the head's checks, the
+ * open PR's mergeability, the failing output, and the real clock and sleep. The
+ * loop and the decision are `retry.ts`'s `waitForChecks`; this is only what it
+ * reads through, so a test drives the same wait against an in-memory record.
+ */
+const checksNeeds = (): ChecksNeeds => ({
+  now: () => new Date(),
+  sleep,
+  readChecks: (sha) => headChecks(sha),
+  prMergeability: (pr) => mergeabilityOf(pr),
+  failureOutput: failuresOutput,
+});
+
+/** The head and the clock bounds of the wait, the workflow's `HEAD_SHA` and timeout. */
+const checksWait = (): ChecksWait => ({ sha: required("HEAD_SHA"), timeoutMs: CHECKS_TIMEOUT_MS, pollMs: POLL_MS });
 
 const run = async (): Promise<void> => {
   const needs: RetryNeeds = retryTargetRepo(REPO, BRANCH);
@@ -290,7 +280,7 @@ const run = async (): Promise<void> => {
     }
     failure = implementFailure(outcome);
   } else if (FAILURE_KIND === "checks") {
-    failure = await checksFailure(openPr);
+    failure = await waitForChecks(checksNeeds(), checksWait(), openPr);
   } else {
     throw new Error(`FAILURE_KIND must be implement or checks, got ${FAILURE_KIND}`);
   }
