@@ -182,7 +182,14 @@ export const sweep = (needs: Needs, config: SweepConfig): SweepResult => {
   const mergeReads = (createdAt: ReadonlyMap<number, string>): MergeReads => ({
     verdict: (pr) => needs.verdict(pr.headSha),
     behindBy: (pr) => needs.behindBy(pr.headSha),
-    headSince: (pr) => headSince(pr, createdAt.get(pr.number) ?? now.toISOString()),
+    headSince: (pr) => {
+      // Every open PR is in the map, so `created` is defined for any PR the
+      // reconciler passes in. An unknown head date reads as undefined, which the
+      // reconciler treats as overdue, rather than as "now", which is within every
+      // deadline and would hide a lost date instead of surfacing it.
+      const created = createdAt.get(pr.number);
+      return created === undefined ? undefined : headSince(pr, created);
+    },
     ticketAuthor: (pr) => (pr.closes === undefined ? undefined : ticketAuthorOf(pr.closes)),
     toldNoTicket: (pr) => toldNoTicketOn(pr.number),
   });
@@ -231,7 +238,7 @@ export const sweep = (needs: Needs, config: SweepConfig): SweepResult => {
     decisions = reconcile(snapshot, deadlines, policy, mergeReads(read.createdAt));
   } catch (error) {
     if (!(error instanceof GhError)) throw error;
-    const aborted = `Sweep of ${repo} aborted before deciding anything: ${error.message}`;
+    const aborted = `Sweep of ${repo} aborted before repairing anything: ${error.message}`;
     console.error(`::error::${aborted}`);
     return { aborted, decisions: [], applied: [], refused: [], failed: [] };
   }

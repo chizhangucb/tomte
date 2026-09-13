@@ -239,6 +239,16 @@ test("a dry run decides but writes nothing", () => {
   assert.equal(result.decisions.filter((d) => d.action.type !== "none").length, 1);
 });
 
+test("a hard merge read that throws aborts the pass and applies nothing (#302)", () => {
+  // The reconciler's own costly reads run inside the sweep's abort path, so a hard
+  // read failing mid-decision aborts the whole pass rather than half-repairing.
+  const ready = openPr(11, { factory: true, autoMerge: true }, minutesAgo(60));
+  const { needs, writes } = inMemory({ openPrs: () => [ready], verdict: throws });
+  const result = sweep(needs, config());
+  assert.match(result.aborted ?? "", /aborted before repairing anything/);
+  assert.deepEqual(writes, []);
+});
+
 /* Soft-fail scenarios: each read the sweep allows to fail leaves the subject alone (acceptance criterion 3). */
 
 test("a ticket author that cannot be read leaves the PR alone rather than aborting the sweep", () => {
