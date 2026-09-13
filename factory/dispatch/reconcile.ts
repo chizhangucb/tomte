@@ -67,7 +67,17 @@
  * `node --experimental-strip-types` without installing the engine.
  */
 import { isFactoryPr } from "../lib/factory-pr.ts";
-import { agentLabels, ESCALATION_LABEL, HOLD_LABELS, PARKED_LABELS, READY_LABEL, REVIEW_LABEL } from "../lib/labels.ts";
+import {
+  agentLabels,
+  BLOCKED_LABEL,
+  ESCALATION_LABEL,
+  HOLD_LABELS,
+  IMPLEMENT_LABEL,
+  IN_PROGRESS_LABEL,
+  PARKED_LABELS,
+  READY_LABEL,
+  REVIEW_LABEL,
+} from "../lib/labels.ts";
 import { issuesClosedBy } from "../lib/linked-issue.ts";
 import { type Author, type TrustPolicy, authorAssociation } from "../lib/trusted-authors.ts";
 import { escalationLabels } from "../retry/escalation.ts";
@@ -424,29 +434,29 @@ const leftAloneDecision = (subject: Subject, labels: readonly string[], deadline
   const parked = PARKED_LABELS.find((l) => labels.includes(l));
   const why = parked ? `parked: ${parked}` : held ? `held: ${held}` : undefined;
   if (!why) return undefined;
-  const state = agentLabels(labels).filter((l) => l !== "agent:blocked")[0] ?? parked;
+  const state = agentLabels(labels).filter((l) => l !== BLOCKED_LABEL)[0] ?? parked;
   return { subject, action: { type: "none" }, log: `#${subject.number} (${subject.kind}) ${state}, deadline ${deadline} min: ${why}` };
 };
 
 const decideTicket = (t: TicketState, snap: Snapshot, deadlines: Deadlines, readRole: RoleReader): Decision | undefined => {
   const has = (l: string) => t.labels.includes(l);
-  if (!has("agent:implement") && !has("agent:in-progress")) return undefined;
+  if (!has(IMPLEMENT_LABEL) && !has(IN_PROGRESS_LABEL)) return undefined;
   const subject: Subject = { kind: "issue", number: t.number };
   const untouched = leftAloneDecision(subject, t.labels, deadlines.stuckMinutes, heldBy(t.labels, undefined));
   if (untouched) return untouched;
-  const state = has("agent:in-progress") ? "agent:in-progress" : "agent:implement";
+  const state = has(IN_PROGRESS_LABEL) ? IN_PROGRESS_LABEL : IMPLEMENT_LABEL;
   const runs = coveringRuns({ kind: "issue", title: t.title }, snap.runs, readRole, (role) => role === "implement");
   return decideStuck(
-    { subject, state, since: t.stateSince, marks: t.marks, runs, expected: "implement run", labels: t.labels, add: "agent:implement" },
+    { subject, state, since: t.stateSince, marks: t.marks, runs, expected: "implement run", labels: t.labels, add: IMPLEMENT_LABEL },
     snap,
     deadlines.stuckMinutes,
   );
 };
 
 const PR_STATES: readonly { label: string; roles: readonly RunRole[]; expected: string; add: string }[] = [
-  { label: "agent:in-progress", roles: ["review", "implement-pr"], expected: "review or implement-pr run", add: REVIEW_LABEL },
+  { label: IN_PROGRESS_LABEL, roles: ["review", "implement-pr"], expected: "review or implement-pr run", add: REVIEW_LABEL },
   { label: REVIEW_LABEL, roles: ["review"], expected: "review run", add: REVIEW_LABEL },
-  { label: "agent:implement", roles: ["implement-pr"], expected: "implement-pr run", add: "agent:implement" },
+  { label: IMPLEMENT_LABEL, roles: ["implement-pr"], expected: "implement-pr run", add: IMPLEMENT_LABEL },
 ];
 
 const decidePrLabel = (p: PrState, snap: Snapshot, deadlines: Deadlines, held: string | undefined, readRole: RoleReader): Decision | undefined => {

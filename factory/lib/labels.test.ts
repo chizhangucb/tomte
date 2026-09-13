@@ -39,8 +39,32 @@ test("`agent:review` is spelled once, in REVIEW_LABEL, and every module that wri
   // else and the reviewer would be started by a label nothing else recognised.
   assert.equal(REVIEW_LABEL, "agent:review");
   assert.ok(HANDED_OFF_LABELS.includes(REVIEW_LABEL), "a PR carrying it is handed off to the reviewer");
-  for (const file of ["factory/dispatch/reconcile.ts", "factory/lib/target-repo.ts"]) {
-    assert.doesNotMatch(codeOf(file), /agent:review/, `${file} spells agent:review instead of reading REVIEW_LABEL`);
+});
+
+/**
+ * The modules that decide on a label: they read one off a subject or write one
+ * onto it, and each of them can import this one (the dispatch and update-branch
+ * cones both carry `lib/labels.ts`, so reaching it costs nothing at runtime).
+ * Prose elsewhere, the retry handler's comment bodies above all, spells labels
+ * at a human and is not a decision.
+ */
+const LABEL_READERS = [
+  "factory/dispatch/reconcile.ts",
+  "factory/dispatch/select.ts",
+  "factory/heartbeat/work.ts",
+  "factory/lib/target-repo.ts",
+];
+
+test("no module that decides on a label spells one: every label read or written comes from here", () => {
+  // The whole point of the module (#311). A literal in one of these is a
+  // second home: renaming the label here would leave that module deciding on
+  // the old string, and nothing but a passing test suite would say so.
+  for (const file of LABEL_READERS) {
+    assert.doesNotMatch(
+      codeOf(file),
+      /agent:[a-z-]+|needs-human|ready-for-agent/,
+      `${file} spells a label in code instead of importing it from lib/labels.ts`,
+    );
   }
 });
 
