@@ -231,6 +231,29 @@ test("a left-alone PR is decided without a single costly read (frugality, #302)"
   assert.deepEqual(writes, []);
 });
 
+test("a run's jobs are read only when the reconciler reaches its role, never for a subject it leaves alone (#307)", () => {
+  // The reconciler drives the job read, and reaches a run's role only when it
+  // filters a labelled, not-left-alone subject's runs. A stuck ticket's run is
+  // read; a PR held through its ticket is left alone before its runs are filtered,
+  // so its run's jobs are never read, and a run belonging to no candidate never is.
+  const jobReads: number[] = [];
+  const stuck = ticket(1);
+  const heldTicket = ticket(5, { labels: ["ready-for-agent", "hold"] });
+  const heldPr = openPr(15, { labels: ["agent:review"], closes: 5, headRef: "agent/issue-5", stateSince: minutesAgo(40) });
+  const stuckRun = run(200, { event: "issues", title: "Ticket 1", conclusion: "failure", createdAt: minutesAgo(35), updatedAt: minutesAgo(35) });
+  const heldRun = run(100, { event: "pull_request_target", title: "Fix #5", headBranch: "agent/issue-5", conclusion: "failure", createdAt: minutesAgo(35), updatedAt: minutesAgo(35) });
+  const orphanRun = run(300, { event: "issues", title: "Ticket 9" });
+  const { needs } = inMemory({
+    openTickets: () => [stuck, heldTicket],
+    openPrs: () => [heldPr],
+    recentRuns: () => [stuckRun, heldRun, orphanRun],
+    jobs: (id) => (jobReads.push(id), [{ name: "call / implement", conclusion: "failure" }]),
+  });
+  const result = sweep(needs, config());
+  assert.equal(result.aborted, undefined);
+  assert.deepEqual(jobReads, [200]);
+});
+
 test("a dry run decides but writes nothing", () => {
   const { needs, writes } = inMemory({ openTickets: () => [ticket(1)] });
   const result = sweep(needs, config({ dryRun: true }));
