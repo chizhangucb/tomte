@@ -1,7 +1,7 @@
 /**
  * The cadence the sender is actually run at, against the one this repo
- * documents (#265), mirroring `waiver.ts`: a pure function from what the last
- * few passes looked like to what the sender prints.
+ * documents (#265), like the switch reads in `variable.ts`: a pure function
+ * from what the last few passes looked like to what the sender prints.
  *
  * `interval.ts` is documentation with a test on it, because the factory cannot
  * set its own interval: a host schedules the sender, a launchd job on the

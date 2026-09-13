@@ -18,7 +18,9 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { WAIVER_VARIABLE } from "../heartbeat/waiver.ts";
+import { WAIVER } from "../heartbeat/variable.ts";
+
+const WAIVER_VARIABLE = WAIVER.variable;
 
 const script = fileURLToPath(new URL("../../scripts/waive-factory-checks.sh", import.meta.url));
 const repoRoot = new URL("../../", import.meta.url);
