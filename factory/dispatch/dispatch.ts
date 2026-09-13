@@ -26,11 +26,11 @@
  * bare `node --experimental-strip-types` and skips installing the engine.
  */
 import { errorMessage } from "../lib/errors.ts";
+import { DISPATCH_LABEL } from "../lib/labels.ts";
 import { type TrustPolicy } from "../lib/trusted-authors.ts";
 
 import { type Subject } from "./reconcile.ts";
 import {
-  DISPATCH_LABEL,
   NO_CRITERIA_REASON,
   alreadyToldNoCriteria,
   type DispatchIssue,

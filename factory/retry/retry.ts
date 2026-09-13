@@ -29,10 +29,12 @@
  * - stand-down (#185): `hold` is on the ticket or its open PR, so no agent
  *   starts, nothing is spent and nothing is escalated; a comment names the label.
  *
- * Which writes may fail softly is the handler's own policy and stays here: the
- * record always throws (as `target-repo.ts` does), and `soft` catches the ones
- * a standing refusal must not turn the run red for (a re-arm GitHub refused, a
- * label already present, a courtesy note on a PR left open).
+ * What each of those outcomes does is `plan.ts`'s (#310): `planFor` turns the
+ * verb into an ordered `Effect[]`, and `main` here applies them in order,
+ * choosing nothing of its own. Which writes may fail softly is the one policy
+ * that stays: the record always throws (as `target-repo.ts` does), and `soft`
+ * catches the ones a standing refusal must not turn the run red for (a re-arm
+ * GitHub refused, a label already present, a courtesy note on a PR left open).
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -40,9 +42,7 @@ import * as path from "node:path";
 import { required } from "../lib/env";
 import { errorMessage } from "../lib/errors.ts";
 import { linkedIssueNumber } from "../lib/linked-issue.ts";
-import { ESCALATION_LABEL, IMPLEMENT_LABEL, IN_PROGRESS_LABEL } from "../lib/labels.ts";
-import { type FactoryPrFacts } from "../lib/factory-pr.ts";
-import { type PrDisposition, prDisposition } from "../lib/pr-disposition.ts";
+import { ESCALATION_LABEL } from "../lib/labels.ts";
 import {
   type CheckFailure,
   type CheckState,
@@ -51,83 +51,38 @@ import {
   unretryableReason,
   waitOver,
 } from "./checks.ts";
-import { escalationLabels, prEscalation } from "./escalation.ts";
 import {
-  type TellAuthorNote,
-  authorConflictReason,
   decide,
-  type EscalatedPr,
-  type FailureKind,
   findHold,
-  type Hold,
   type Subject,
-  MAX_RETRIES,
-  type Mergeability,
   RATE_LIMITED_REASON,
-  renderTellAuthorComment,
-  renderEscalationComment,
-  renderHandOffComment,
-  renderLeftOpenPrComment,
-  renderRequeueComment,
-  renderRetryComment,
-  renderStandDownComment,
   REQUEUED_FILE,
   retriesUsed,
-  retryLabel,
-  type TicketOrPr,
   ticketOrPr,
   ticketOrPrFromPr,
   ticketOrPrFromTicket,
   type Unresolved,
 } from "./decide.ts";
+import {
+  type Effect,
+  type Failure,
+  type OpenPr,
+  type PlanReads,
+  type PrMergeability,
+  type RetryConfig,
+  type Target,
+  planFor,
+  recordOn,
+} from "./plan.ts";
 
 // Re-exported so `decide.ts`'s `RATE_LIMITED_REASON` reaches the entry through
 // one import of this module rather than two.
 export { RATE_LIMITED_REASON };
 
-// The workflow inputs `resolveTarget` reads. Read at module scope, not with
-// `required`, so importing this module for a test never exits: the ticket-only
-// path is the one that requires ISSUE_NUMBER, and it does so at call time.
-const PR_INPUT = process.env.PR_NUMBER || undefined;
-const ISSUE_INPUT = process.env.ISSUE_NUMBER || undefined;
-const BRANCH = process.env.BRANCH ?? "";
-
-/**
- * An open PR for the branch: its number, and the facts that place it. One
- * object and not two fields, so there is no state where the number is known and
- * the facts are not; escalation asks `prEscalation` whether the factory
- * authored this PR before it may close it (#174).
- */
-export interface OpenPr {
-  readonly number: string;
-  readonly facts: FactoryPrFacts;
-}
-
-export type Target = TicketOrPr<OpenPr>;
-
-/**
- * An open PR's mergeability and base, as GitHub reports them, with the PR they
- * belong to. The whole `OpenPr`, since the hand-off this feeds asks whether the
- * factory authored the branch before it puts an implementer on it (#183).
- */
-export interface PrMergeability {
-  readonly pr: OpenPr;
-  readonly mergeable: Mergeability;
-  readonly base: string;
-}
-
-/** What ended the attempt, as the entry point built it from files or the head's checks. */
-export interface Failure {
-  readonly kind: FailureKind;
-  readonly summary: string;
-  readonly output: string;
-  /** Why this is not the ticket's failure: requeue, do not count the attempt. */
-  readonly requeue?: string;
-  /** Why a retry cannot fix it; escalate at once. */
-  readonly unretryable?: string;
-  /** The open PR as the wait for checks last read it; undefined when it closed as the handler waited, or when no PR was read. */
-  readonly mergeability?: PrMergeability;
-}
+// The shapes one failed attempt is described with live in `plan.ts`, which is
+// pure and which `planFor` reads; they are re-exported here so `retry-run.ts`
+// and the tests reach the handler and its inputs through one import.
+export type { Failure, OpenPr, PrMergeability, RetryConfig, Target };
 
 /**
  * Everything the failed-attempt path needs from the target repo, never a raw
@@ -153,14 +108,6 @@ export interface RetryNeeds {
   readonly ensureRetryLabel: (label: string) => void;
   readonly closePr: (number: string, comment: string) => void;
   readonly disarmAutoMerge: (number: string) => void;
-}
-
-/** What one failed attempt is acted on with. */
-export interface RetryConfig {
-  readonly branch: string;
-  readonly runUrl: string;
-  /** The workflow's FAILURE_KIND input, not the failure's own kind; only the checks path can lose its PR mid-wait. */
-  readonly failureKind: "implement" | "checks";
 }
 
 /**
@@ -244,23 +191,14 @@ const soft = (write: () => void): void => {
 const outputDir = (): string => process.env.OUTPUT_DIR ?? "/tmp";
 
 /**
- * Where the record of this run goes: the ticket when there is one, since that
- * outlives the PR and is what a human reads; the PR only when no ticket was found.
+ * The marker file a requeued or stood-down PR leaves behind (#148), for the
+ * workflow steps that take `agent:in-progress` off on their way out: the one
+ * they must not take it off for is this PR.
  */
-const recordOn = (target: Target): Subject =>
-  target.issue === undefined ? { kind: "pr", number: target.pr.number } : { kind: "issue", number: target.issue };
-
-/**
- * What a label has to go on to move the factory: the open PR when there is one,
- * so implement-pr runs on the branch, and the ticket otherwise. The mirror of
- * `recordOn`; a retry uses both at once.
- */
-const actOn = (target: Target): Subject =>
-  target.issue === undefined
-    ? { kind: "pr", number: target.pr.number }
-    : target.pr
-      ? { kind: "pr", number: target.pr.number }
-      : { kind: "issue", number: target.issue };
+const writeRequeued = (reason: string): void => {
+  fs.mkdirSync(outputDir(), { recursive: true });
+  fs.writeFileSync(path.join(outputDir(), REQUEUED_FILE), `${reason}\n`);
+};
 
 /**
  * The ticket and its open PR from whichever number the workflow knows. A PR
@@ -268,6 +206,12 @@ const actOn = (target: Target): Subject =>
  * open PR is only this run's, on BRANCH and linking the ticket (#204).
  */
 const resolveTarget = (needs: RetryNeeds): Target | Unresolved => {
+  // The workflow inputs, read here and not at module scope, so importing this
+  // module never exits and a test drives each path by setting them. `required`
+  // is still asked only on the path that needs it, the ticket-only one.
+  const PR_INPUT = process.env.PR_NUMBER || undefined;
+  const ISSUE_INPUT = process.env.ISSUE_NUMBER || undefined;
+  const BRANCH = process.env.BRANCH ?? "";
   const openPr = (number: string, pr: { headRefName: string; body: string | null }): OpenPr => ({
     number,
     facts: { headRef: pr.headRefName, body: pr.body ?? "" },
@@ -292,143 +236,6 @@ const resolveTarget = (needs: RetryNeeds): Target | Unresolved => {
   });
 };
 
-/**
- * The **PR fix** on the open PR (#183, #309): hand-off or tell-author, the
- * label that records it, and the sentence naming what it does, from
- * `prDisposition`. `base` is the branch a conflict hand-off merges in; the
- * failing-check path has none to give and does not name it, so it asks without one.
- */
-const prFixOf = (pr: OpenPr, base?: string): PrDisposition => prDisposition(pr.facts, base);
-
-/** The label the PR fix decided, on the PR. On a hand-off it starts the next run; on a tell-author it makes the decline stick. */
-const labelPr = (needs: RetryNeeds, pr: OpenPr, fix: PrDisposition): void => {
-  needs.addLabel({ kind: "pr", number: pr.number }, fix.add);
-};
-
-/**
- * What a requeued or stood-down PR is left in: `agent:in-progress`, the label
- * the reconciler sweeps, plus the marker file for the workflow steps that take
- * that label off on the way out (#148). The label goes on first, then the marker.
- */
-const keepInProgress = (needs: RetryNeeds, pr: string, reason: string): void => {
-  needs.addLabel({ kind: "pr", number: pr }, IN_PROGRESS_LABEL);
-  fs.mkdirSync(outputDir(), { recursive: true });
-  fs.writeFileSync(path.join(outputDir(), REQUEUED_FILE), `${reason}\n`);
-};
-
-/**
- * Tell the author of a PR the factory did not author (#183): the label the
- * PR fix chose, and what failed, on their own thread. `note` is undefined when
- * this thread already carries the record; when there is one it goes last, since
- * by then the label is on.
- */
-const tellAuthor = (needs: RetryNeeds, config: RetryConfig, pr: OpenPr, fix: PrDisposition, note: TellAuthorNote | undefined): void => {
-  labelPr(needs, pr, fix);
-  if (note) needs.comment({ kind: "pr", number: pr.number }, renderTellAuthorComment({ ...note, sentence: fix.sentence, runUrl: config.runUrl }));
-  console.log(`PR #${pr.number} is its author's to fix: no ${IMPLEMENT_LABEL}, ${fix.add} on.`);
-};
-
-const retry = (needs: RetryNeeds, config: RetryConfig, target: Target, retryNumber: number, failure: Failure): void => {
-  const label = retryLabel(retryNumber);
-  const fix = target.pr ? prFixOf(target.pr) : undefined;
-  const comment = renderRetryComment({
-    retry: retryNumber,
-    kind: failure.kind,
-    runUrl: config.runUrl,
-    output: failure.output,
-    action: fix?.action,
-  });
-  // The record goes on whatever the retry hands the fix to: the attempt was
-  // made, it failed, and the count moves, so nothing is dropped in silence.
-  const on = recordOn(target);
-  needs.comment(on, comment);
-  soft(() => needs.ensureRetryLabel(label));
-  needs.addLabel(on, label);
-  // The label goes last, once the context the next run reads is in place.
-  if (target.pr && fix) {
-    if (fix.action === "tell-author") {
-      tellAuthor(
-        needs,
-        config,
-        target.pr,
-        fix,
-        on.kind === "pr"
-          ? undefined
-          : {
-              reason: failure.summary,
-              issueNumber: on.number,
-              output: failure.output,
-              // The retry just recorded was the ticket's last, so the next
-              // failure on this PR escalates it, and the author has to know.
-              escalatesNext: retryNumber >= MAX_RETRIES,
-            },
-      );
-    } else {
-      labelPr(needs, target.pr, fix);
-    }
-    console.log(`Retry ${retryNumber} of ${MAX_RETRIES}: ${label} on ${on.kind} #${on.number}, ${fix.add} on pr #${target.pr.number} (${failure.summary}).`);
-    return;
-  }
-  const trigger = actOn(target);
-  needs.addLabel(trigger, IMPLEMENT_LABEL);
-  console.log(
-    `Retry ${retryNumber} of ${MAX_RETRIES}: ${label} on ${on.kind} #${on.number}, ${IMPLEMENT_LABEL} on ${trigger.kind} #${trigger.number} (${failure.summary}).`,
-  );
-};
-
-const requeue = (needs: RetryNeeds, config: RetryConfig, target: Target, reason: string): void => {
-  const on = actOn(target);
-  const onPr = on.kind === "pr";
-  needs.comment(on, renderRequeueComment({ reason, runUrl: config.runUrl, onPr }));
-  if (onPr) keepInProgress(needs, on.number, reason);
-  console.log(
-    `Requeued ${on.kind} #${on.number} without spending a retry: ${reason}` +
-      (onPr
-        ? `; left in ${IN_PROGRESS_LABEL}, the reconciler re-adds the start label at its stuck deadline.`
-        : "; the dispatcher re-dispatches it."),
-  );
-};
-
-/**
- * A person holds the subject (#185): the retry's label is the one thing that
- * would have started an agent, and it is not written; neither is
- * `factory:retry-<n>`, nor anything of escalation's. What is left is what a
- * requeue leaves, so removing the hold is the whole of resuming. The comment
- * goes where the hold was found and names the label and the subject.
- */
-const standDown = (
-  needs: RetryNeeds,
-  config: RetryConfig,
-  target: Target,
-  { hold, reason }: { readonly hold: Hold; readonly reason: string },
-  failure: Failure,
-): void => {
-  const resume = actOn(target);
-  const pr = resume.kind === "pr" ? resume.number : undefined;
-  needs.comment(hold.on, renderStandDownComment({ hold, summary: failure.summary, runUrl: config.runUrl, pr }));
-  if (pr) keepInProgress(needs, pr, reason);
-  console.log(
-    `Stood down: ${reason}. No retry spent, nothing labeled` +
-      (pr ? `; PR #${pr} left in ${IN_PROGRESS_LABEL} for the reconciler once the hold is off.` : "; the dispatcher picks the ticket up once the hold is off."),
-  );
-};
-
-/**
- * The conflict hand-off update-branch makes, from here (#144): a comment naming
- * the cause, then the implementer's label, on a branch the factory authored; a
- * tell-author otherwise (#183). No retry is spent either way.
- */
-const handOff = (needs: RetryNeeds, config: RetryConfig, { pr, base }: PrMergeability, reason: string): void => {
-  const fix = prFixOf(pr, base);
-  if (fix.action === "tell-author") {
-    tellAuthor(needs, config, pr, fix, { reason: authorConflictReason(base), issueNumber: undefined, output: "" });
-    return;
-  }
-  needs.comment({ kind: "pr", number: pr.number }, renderHandOffComment({ reason, add: fix.add, sentence: fix.sentence, runUrl: config.runUrl }));
-  labelPr(needs, pr, fix);
-  console.log(`Handed off PR #${pr.number} without spending a retry: ${reason}; ${fix.add} on.`);
-};
-
 /** The branch and log reads the escalation comment wants, each shrugged off on failure: a courtesy note is not the record. */
 const safeBranchExists = (needs: RetryNeeds): boolean => {
   try {
@@ -447,75 +254,55 @@ const safeArtifactUrl = (needs: RetryNeeds): string | undefined => {
   }
 };
 
-const prNote = (escalatedPr: EscalatedPr | undefined): string =>
-  !escalatedPr
-    ? ""
-    : escalatedPr.closed
-      ? `, PR #${escalatedPr.number} closed`
-      : `, PR #${escalatedPr.number} left open (the factory did not author it)`;
+/**
+ * The costly reads `planFor` asks for at the arm that needs them, backed by the
+ * record. The branch and log reads are the escalation comment's courtesy and are
+ * shrugged off here, so a read the run cannot make costs it the comment's detail
+ * rather than the escalation.
+ */
+const planReads = (needs: RetryNeeds): PlanReads => ({
+  labelsOf: needs.labelsOf,
+  branchExists: () => safeBranchExists(needs),
+  artifactUrl: () => safeArtifactUrl(needs),
+});
 
-const escalate = (needs: RetryNeeds, config: RetryConfig, target: Target, reason: string, failure: Failure): void => {
-  const openPr = target.pr;
-  let escalatedPr: EscalatedPr | undefined;
-  if (openPr) {
-    const { remove, add, close } = prEscalation({
-      ...openPr.facts,
-      labels: needs.labelsOf({ kind: "pr", number: openPr.number }),
-    });
-    for (const label of remove) soft(() => needs.removeLabel({ kind: "pr", number: openPr.number }, label));
-    if (add) soft(() => needs.addLabel({ kind: "pr", number: openPr.number }, add));
-    if (close) {
-      soft(() =>
-        needs.closePr(
-          openPr.number,
-          `Closed by the factory: ${reason}. The branch is kept; see ${target.issue ? `#${target.issue}` : "the run"} for the escalation. Run: ${config.runUrl}`,
-        ),
-      );
-    } else {
-      // Closing cancels auto-merge; leaving the PR open does not, so a PR the
-      // factory has declared itself done with is disarmed by hand. Refused when
-      // none was armed, which `soft` swallows.
-      soft(() => needs.disarmAutoMerge(openPr.number));
-    }
-    escalatedPr = { number: openPr.number, closed: close };
+/**
+ * One planned effect, carried out. The whole of the handler's own policy is
+ * here: which purposes a write serves decide whether a refusal of it turns the
+ * run red. The record (the comment and the label that carry what happened) must
+ * land; a courtesy note, a label GitHub may refuse because it is already there
+ * or already gone, a close and a re-arm are shrugged off (#83, #148, #174).
+ */
+const applyEffect = (needs: RetryNeeds, effect: Effect): void => {
+  switch (effect.kind) {
+    case "comment":
+      return needs.comment(effect.on, effect.body);
+    case "note":
+      return soft(() => needs.comment(effect.on, effect.body));
+    case "add-label":
+      return needs.addLabel(effect.on, effect.label);
+    case "ensure-label":
+      return soft(() => needs.ensureRetryLabel(effect.label));
+    case "remove-label":
+      return soft(() => needs.removeLabel(effect.on, effect.label));
+    case "park-pr":
+      return soft(() => needs.addLabel({ kind: "pr", number: effect.number }, effect.label));
+    case "close-pr":
+      return soft(() => needs.closePr(effect.number, effect.comment));
+    case "disarm-auto-merge":
+      return soft(() => needs.disarmAutoMerge(effect.number));
+    case "mark-requeued":
+      return writeRequeued(effect.reason);
+    case "log":
+      return console.log(effect.line);
   }
-  const on = recordOn(target);
-  const labels = escalationLabels(needs.labelsOf(on));
-  for (const label of labels.remove) soft(() => needs.removeLabel(on, label));
-  // The record: the label and the comment that must not be lost, so neither is soft.
-  needs.addLabel(on, labels.add);
-  needs.comment(
-    on,
-    renderEscalationComment({
-      issueNumber: on.number,
-      reason,
-      summary: failure.summary,
-      runUrl: config.runUrl,
-      logUrl: safeArtifactUrl(needs),
-      branch: config.branch,
-      branchExists: safeBranchExists(needs),
-      pr: escalatedPr,
-      output: failure.output,
-    }),
-  );
-  // The courtesy note on a PR left open goes last and soft: the record above is
-  // the thing that must not be lost, and this is skipped when the record is the
-  // PR's own thread, which the escalation comment already landed on.
-  if (escalatedPr && !escalatedPr.closed && on.kind !== "pr") {
-    soft(() =>
-      needs.comment(
-        { kind: "pr", number: escalatedPr!.number },
-        renderLeftOpenPrComment({ reason, issueNumber: on.number, runUrl: config.runUrl }),
-      ),
-    );
-  }
-  console.log(`Escalated ${on.kind} #${on.number}: ${labels.add} on, ${labels.remove.join(", ") || "no factory labels"} off${prNote(escalatedPr)}.`);
 };
 
 /**
  * The failed-attempt path: decide with `decide.ts` from the target's labels and
- * the built failure, then act. The reads and writes go through the record, so a
- * test drives this with an in-memory target repo and asserts what it wrote.
+ * the built failure, plan with `plan.ts`, and apply the plan in order. Nothing
+ * of what happens is chosen here; the reads and writes go through the record, so
+ * a test drives this with an in-memory target repo and asserts what it wrote.
  */
 const main = (needs: RetryNeeds, config: RetryConfig, target: Target, failure: Failure): void => {
   let subject = target;
@@ -552,14 +339,8 @@ const main = (needs: RetryNeeds, config: RetryConfig, target: Target, failure: F
   });
   console.log(`${failure.summary}. Retries used: ${used}. Decision: ${decision.action}${"reason" in decision ? ` (${decision.reason})` : ""}.`);
 
-  if (decision.action === "stand-down") standDown(needs, config, subject, decision, failure);
-  else if (decision.action === "retry") retry(needs, config, subject, decision.retry, failure);
-  else if (decision.action === "escalate") escalate(needs, config, subject, decision.reason, failure);
-  else if (decision.action === "requeue") requeue(needs, config, subject, decision.reason);
-  else if (decision.action === "hand-off") {
-    // decide answers hand-off only from a mergeability it was given, and one is given only from a read.
-    if (!mergeability) throw new Error("hand-off decided without a mergeability read");
-    handOff(needs, config, mergeability, decision.reason);
+  for (const effect of planFor({ decision, target: subject, config, failure }, planReads(needs))) {
+    applyEffect(needs, effect);
   }
 };
 

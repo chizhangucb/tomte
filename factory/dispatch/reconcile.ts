@@ -67,7 +67,17 @@
  * `node --experimental-strip-types` without installing the engine.
  */
 import { isFactoryPr } from "../lib/factory-pr.ts";
-import { agentLabels, ESCALATION_LABEL, HOLD_LABELS, READY_LABEL } from "../lib/labels.ts";
+import {
+  agentLabels,
+  BLOCKED_LABEL,
+  ESCALATION_LABEL,
+  HOLD_LABELS,
+  IMPLEMENT_LABEL,
+  IN_PROGRESS_LABEL,
+  PARKED_LABELS,
+  READY_LABEL,
+  REVIEW_LABEL,
+} from "../lib/labels.ts";
 import { issuesClosedBy } from "../lib/linked-issue.ts";
 import { type Author, type TrustPolicy, authorAssociation } from "../lib/trusted-authors.ts";
 import { escalationLabels } from "../retry/escalation.ts";
@@ -83,8 +93,6 @@ export type Deadlines = {
 
 export const DEFAULT_DEADLINES: Deadlines = { stuckMinutes: 30, verdictMinutes: 30, updateMinutes: 30 };
 
-export { ESCALATION_LABEL };
-export const PARKED_LABELS = ["agent:blocked", ESCALATION_LABEL] as const;
 export const UPDATE_BRANCH_EVENT = "factory-update-branch";
 export const SWEEP_MARK = /^<!-- factory:sweep miss=(\d+)(?: tries=(\d+))? -->/;
 /**
@@ -425,29 +433,29 @@ const leftAloneDecision = (subject: Subject, labels: readonly string[], deadline
   const parked = PARKED_LABELS.find((l) => labels.includes(l));
   const why = parked ? `parked: ${parked}` : held ? `held: ${held}` : undefined;
   if (!why) return undefined;
-  const state = agentLabels(labels).filter((l) => l !== "agent:blocked")[0] ?? parked;
+  const state = agentLabels(labels).filter((l) => l !== BLOCKED_LABEL)[0] ?? parked;
   return { subject, action: { type: "none" }, log: `#${subject.number} (${subject.kind}) ${state}, deadline ${deadline} min: ${why}` };
 };
 
 const decideTicket = (t: TicketState, snap: Snapshot, deadlines: Deadlines, readRole: RoleReader): Decision | undefined => {
   const has = (l: string) => t.labels.includes(l);
-  if (!has("agent:implement") && !has("agent:in-progress")) return undefined;
+  if (!has(IMPLEMENT_LABEL) && !has(IN_PROGRESS_LABEL)) return undefined;
   const subject: Subject = { kind: "issue", number: t.number };
   const untouched = leftAloneDecision(subject, t.labels, deadlines.stuckMinutes, heldBy(t.labels, undefined));
   if (untouched) return untouched;
-  const state = has("agent:in-progress") ? "agent:in-progress" : "agent:implement";
+  const state = has(IN_PROGRESS_LABEL) ? IN_PROGRESS_LABEL : IMPLEMENT_LABEL;
   const runs = coveringRuns({ kind: "issue", title: t.title }, snap.runs, readRole, (role) => role === "implement");
   return decideStuck(
-    { subject, state, since: t.stateSince, marks: t.marks, runs, expected: "implement run", labels: t.labels, add: "agent:implement" },
+    { subject, state, since: t.stateSince, marks: t.marks, runs, expected: "implement run", labels: t.labels, add: IMPLEMENT_LABEL },
     snap,
     deadlines.stuckMinutes,
   );
 };
 
 const PR_STATES: readonly { label: string; roles: readonly RunRole[]; expected: string; add: string }[] = [
-  { label: "agent:in-progress", roles: ["review", "implement-pr"], expected: "review or implement-pr run", add: "agent:review" },
-  { label: "agent:review", roles: ["review"], expected: "review run", add: "agent:review" },
-  { label: "agent:implement", roles: ["implement-pr"], expected: "implement-pr run", add: "agent:implement" },
+  { label: IN_PROGRESS_LABEL, roles: ["review", "implement-pr"], expected: "review or implement-pr run", add: REVIEW_LABEL },
+  { label: REVIEW_LABEL, roles: ["review"], expected: "review run", add: REVIEW_LABEL },
+  { label: IMPLEMENT_LABEL, roles: ["implement-pr"], expected: "implement-pr run", add: IMPLEMENT_LABEL },
 ];
 
 const decidePrLabel = (p: PrState, snap: Snapshot, deadlines: Deadlines, held: string | undefined, readRole: RoleReader): Decision | undefined => {
@@ -624,7 +632,7 @@ const decideUnjudged = (p: PrState, snap: Snapshot, deadlines: Deadlines, held: 
   if (verdict !== "none") return none(`#${p.number} (pr) not a factory PR, factory/verdict ${verdict} on ${sha}, deadline ${deadlines.verdictMinutes} min: judged or being judged`);
   const { age, head } = sinceHead(p, `not a factory PR, no factory/verdict on ${sha}`, Date.parse(snap.now), deadlines.verdictMinutes, reads.headSince(p));
   if (age !== undefined && age < deadlines.verdictMinutes) return none(`${head}: within deadline`);
-  return { subject, action: { type: "relabel", remove: [], add: "agent:review" }, log: `${head}: add agent:review` };
+  return { subject, action: { type: "relabel", remove: [], add: REVIEW_LABEL }, log: `${head}: add ${REVIEW_LABEL}` };
 };
 
 /**
@@ -667,7 +675,7 @@ const decidePrMerge = (p: PrState, snap: Snapshot, deadlines: Deadlines, held: s
     if (age !== undefined && age < deadlines.verdictMinutes) return none(`${head}: within deadline`);
     // A hold withholds the reviewer, never the merge path above and below (#210).
     if (held) return none(`${head}: held: ${held}`);
-    return { subject, action: { type: "relabel", remove: [], add: "agent:review" }, log: `${head}: add agent:review` };
+    return { subject, action: { type: "relabel", remove: [], add: REVIEW_LABEL }, log: `${head}: add ${REVIEW_LABEL}` };
   }
   if (verdict === "pending") return none(`#${p.number} (pr) auto-merge armed, factory/verdict pending on ${sha}, deadline ${deadlines.verdictMinutes} min: reviewer running`);
   if (verdict !== "success") return none(`#${p.number} (pr) auto-merge armed, factory/verdict ${verdict} on ${sha}, deadline ${deadlines.verdictMinutes} min: the retry handler owns it`);

@@ -16,12 +16,12 @@ import { test } from "node:test";
 
 import { type Subject } from "./reconcile.ts";
 import {
-  DISPATCH_LABEL,
   type DispatchIssue,
   NO_CRITERIA_REASON,
   noCriteriaComment,
 } from "./select.ts";
 import { type DispatchConfig, type DispatchNeeds, dispatch } from "./dispatch.ts";
+import { DISPATCH_LABEL } from "../lib/labels.ts";
 import { trustPolicy } from "../lib/trusted-authors.ts";
 
 /** The shape a ticket has to have to be dispatched at all: a checklist under the heading. */

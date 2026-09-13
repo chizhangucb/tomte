@@ -51,6 +51,7 @@ import * as nodePath from "node:path";
 import { type DispatchNeeds } from "../dispatch/dispatch.ts";
 import { fromGitHub } from "../dispatch/select.ts";
 import { type JobSummary, type Needs, type OpenPr } from "../dispatch/sweep.ts";
+import { IMPLEMENT_LABEL, IN_PROGRESS_LABEL, REVIEW_LABEL } from "./labels.ts";
 import { type Author } from "./trusted-authors.ts";
 import { GhError, gh } from "./gh.ts";
 
@@ -149,7 +150,7 @@ export const targetRepo = (repo: string, base: string): Needs => {
     paginate(`repos/${repo}/issues?state=open&per_page=100`, "issues", writeEnv)
       .filter((raw: any) => !raw.pull_request)
       .map(ticketFromGitHub)
-      .map((t: TicketState) => withLabelState(t, ["agent:in-progress", "agent:implement"]));
+      .map((t: TicketState) => withLabelState(t, [IN_PROGRESS_LABEL, IMPLEMENT_LABEL]));
 
   /** `gh pr list --json` is its own projection; 200 PRs with bodies fit the buffer with room. */
   const openPrs = (): OpenPr[] => {
@@ -158,7 +159,7 @@ export const targetRepo = (repo: string, base: string): Needs => {
       "--json", "number,title,headRefName,headRefOid,labels,autoMergeRequest,body,createdAt,isDraft,isCrossRepository",
     ], writeEnv);
     return rawPrs.map((raw) => ({
-      pr: withLabelState(prFromGitHub(raw), ["agent:in-progress", "agent:review", "agent:implement"]),
+      pr: withLabelState(prFromGitHub(raw), [IN_PROGRESS_LABEL, REVIEW_LABEL, IMPLEMENT_LABEL]),
       createdAt: raw.createdAt,
     }));
   };

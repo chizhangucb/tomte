@@ -213,61 +213,6 @@ test("the requeue comment says what moves the ticket or PR next, and neither is 
   assert.doesNotMatch(onPr, /human/);
 });
 
-/** Source with its comments gone: prose that names a label is not a call that adds one. */
-const withoutComments = (source: string): string =>
-  source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
-
-/**
- * What the handler leaves on a requeued PR. It is read from its source
- * because the handler itself only makes API calls, and two facts are
- * readable there (#148). `agent:blocked` is nowhere in it: the requeue was
- * the one place it added that label, on a PR and never on a ticket. And a
- * requeued PR keeps `agent:in-progress`, the label the reconciler sweeps, so
- * the PR is picked up at the stuck deadline instead of sitting with no label
- * and nothing to pick it up; implement-pr's retry job takes that label off a
- * step before the handler runs, so the handler puts it back, and it writes
- * `REQUEUED_FILE` for the workflows that take it off afterwards.
- */
-test("the retry handler leaves a requeued PR in agent:in-progress, and agent:blocked nowhere", () => {
-  const code = withoutComments(fs.readFileSync(new URL("./retry.ts", import.meta.url), "utf8"));
-  assert.ok(!code.includes("BLOCKED_LABEL"), "the retry handler still names BLOCKED_LABEL");
-  assert.ok(!code.includes(BLOCKED_LABEL), `the retry handler still adds ${BLOCKED_LABEL}`);
-  assert.ok(code.includes("IN_PROGRESS_LABEL"), "a requeued PR is not kept in agent:in-progress");
-  assert.ok(code.includes("REQUEUED_FILE"), `the handler writes no ${REQUEUED_FILE} for the workflow to read`);
-});
-
-/**
- * One top-level `const` of the handler, comments gone, up to the line that
- * closes it. The handler runs `main()` on import, so what it does with a hold
- * (#185) is read from its source, as the requeue test above reads it.
- */
-const handlerFunction = (name: string): string => {
-  const code = withoutComments(fs.readFileSync(new URL("./retry.ts", import.meta.url), "utf8"));
-  const start = code.indexOf(`\nconst ${name} = `);
-  assert.ok(start >= 0, `retry.ts has no top-level ${name}`);
-  return code.slice(start, code.indexOf("\n};", start));
-};
-
-test("the retry handler asks for a hold before it decides, on the ticket and on its open PR", () => {
-  const main = handlerFunction("main");
-  assert.match(main, /findHold\(/, "the handler never looks for a hold");
-  assert.match(main, /decide\(\{[^}]*\bheld\b[^}]*\}\)/, "decide is never told about the hold it found");
-  // The PR's own labels are read too: the label a retry adds goes on the PR whenever one is open.
-  assert.match(main, /labelsOf\(pr\)/, "a hold on the open PR is never read");
-  assert.match(main, /"stand-down"\) standDown\(/, "a stand-down decision is not acted on as one");
-});
-
-test("standing down writes no retry label, starts nothing, escalates nothing, and leaves a PR for the reconciler", () => {
-  const standDown = handlerFunction("standDown");
-  // Criteria 2 and 3 of #185: no `factory:retry-N`, no `needs-human`, no `agent:*` taken off.
-  for (const write of ["retryLabel", "ensureRetryLabel", "IMPLEMENT_LABEL", "ESCALATION_LABEL", "escalationLabels", "--remove-label", "labelPr"]) {
-    assert.ok(!standDown.includes(write), `standing down still reaches ${write}`);
-  }
-  assert.match(standDown, /renderStandDownComment\(/, "standing down says nothing about which label stopped it");
-  // A PR is left where a requeue leaves one (#148): `agent:in-progress`, for the reconciler.
-  assert.match(standDown, /keepInProgress\(/, "a stood-down PR is left with no `agent:*` label, which nothing sweeps");
-});
-
 /** One step of a workflow by name, its comment lines dropped, split the way `reviewStep` below splits them. */
 const workflowStep = (file: string, name: string, from = 0): string => {
   const yaml = fs.readFileSync(new URL(`../../.github/workflows/${file}`, import.meta.url), "utf8").slice(from);
@@ -711,16 +656,4 @@ test("a fork's PR on a branch named like the run's is not the ticket's open PR",
   const own = listed("13", RUN_BRANCH, "Implemented by the software factory.\n\nCloses #7");
   assert.equal(ticketOrPrFromTicket({ ticket: "7", branch: RUN_BRANCH, open: [fork] }).pr, undefined);
   assert.equal(ticketOrPrFromTicket({ ticket: "7", branch: RUN_BRANCH, open: [fork, own] }).pr, own);
-});
-
-test("the retry handler picks a ticket's open PR by the run's branch, and takes a PR it is handed on whatever branch it is", () => {
-  const resolve = handlerFunction("resolveTarget");
-  const prPath = resolve.slice(resolve.indexOf("if (PR_INPUT)"), resolve.indexOf('required("ISSUE_NUMBER")'));
-  const ticketPath = resolve.slice(resolve.indexOf('required("ISSUE_NUMBER")'));
-  assert.match(ticketPath, /ticketOrPrFromTicket\(\{[^}]*\bbranch: BRANCH\b[^}]*\}\)/, "the ticket-only path does not ask for the run's own PR");
-  assert.match(ticketPath, /fromFork: p\.isCrossRepository/, "the ticket-only path cannot tell a fork's PR from the run's own");
-  assert.ok(!ticketPath.includes(".find("), "the ticket-only path still picks a PR of its own, beside the seam");
-  // Out of scope for #204: a PR handed over is named, not searched for, and is the subject whatever its branch.
-  assert.match(prPath, /ticketOrPrFromPr\(/);
-  assert.ok(!prPath.includes("BRANCH"), "the PR-number path now reads the run's branch");
 });
