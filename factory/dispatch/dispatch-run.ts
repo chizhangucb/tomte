@@ -5,7 +5,8 @@
  * non-zero if a label failed. The decisions and the writes are `dispatch.ts`'s;
  * this file is only the wiring, as `sweep-run.ts` is the wiring for `sweep.ts`.
  *
- * Env: GH_REPO (owner/repo), GH_TOKEN (FACTORY_PAT), optional OUTPUT_DIR for
+ * Env: GH_REPO (owner/repo), FACTORY_PAT (the writing key; the dispatcher's
+ * reads all use it, so no READ_TOKEN is needed), optional OUTPUT_DIR for
  * dispatch.json, optional DRY_RUN=1 to select without labeling, optional
  * TRUSTED_AUTHOR_ASSOCIATIONS (default OWNER) naming whose tickets run.
  *

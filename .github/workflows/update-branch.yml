@@ -74,11 +74,9 @@ jobs:
         # No npm install: the script is builtins only and runs on strip-types.
         env:
           GH_REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ secrets.FACTORY_PAT }}
-          # The reading/status key under both names during the rename (#282): READ_TOKEN
-          # is the settled name, STATUS_TOKEN the old one it replaces, dropped by #288.
+          FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
+          # The reading/status key, its settled name (#288 dropped the old STATUS_TOKEN).
           READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          STATUS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           OUTPUT_DIR: ${{ runner.temp }}/factory-out

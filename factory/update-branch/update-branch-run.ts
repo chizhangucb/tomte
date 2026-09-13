@@ -5,8 +5,8 @@
  * The decisions and the writes are `update-branch.ts`'s; this file is only the
  * wiring, as `dispatch/sweep-run.ts` is the wiring for the sweep.
  *
- * Env: GH_REPO (owner/repo), GH_TOKEN (FACTORY_PAT, for the update call,
- * comments, labels and commit reads), STATUS_TOKEN (GITHUB_TOKEN, for reading
+ * Env: GH_REPO (owner/repo), FACTORY_PAT (the writing key, for the update call,
+ * comments, labels and commit reads), READ_TOKEN (GITHUB_TOKEN, for reading
  * and posting statuses; the key choice lives in `target-repo.ts`), optional
  * BASE_BRANCH (default main), optional RUN_URL, optional OUTPUT_DIR for
  * update-branch.json, optional DRY_RUN=1 to plan without writing.

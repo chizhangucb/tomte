@@ -5,8 +5,8 @@
  * aborted the pass. The decisions and the writes are `sweep.ts`'s; this file is
  * only the wiring, as `heartbeat/send.ts` is the wiring for `heartbeat.ts`.
  *
- * Env: GH_REPO (owner/repo), GH_TOKEN (FACTORY_PAT), READ_TOKEN (GITHUB_TOKEN;
- * defaults to GH_TOKEN inside `target-repo.ts`), optional BASE_BRANCH (main),
+ * Env: GH_REPO (owner/repo), FACTORY_PAT (the writing key), READ_TOKEN (the
+ * reading key, GITHUB_TOKEN), optional BASE_BRANCH (main),
  * STUCK_MINUTES, VERDICT_MINUTES, UPDATE_MINUTES (see DEFAULT_DEADLINES),
  * TRUSTED_AUTHOR_ASSOCIATIONS (default OWNER), RUN_URL, OUTPUT_DIR for
  * sweep.json, DRY_RUN=1 to decide without writing.

@@ -3,13 +3,14 @@
  * make against a target, written once here and handed to a script as its needs
  * record. docs/pipeline.md, "How a script is wired", carries the pattern.
  *
- * The key choice lives here, not in any script. Two settled names (#282): the
- * writing key is `FACTORY_PAT`, so its events fire, and the reading key, for the
- * reads a fine-grained PAT cannot make (Actions runs and jobs, commit statuses),
- * is `READ_TOKEN`. Both accept the old name they replace until the contract
- * ticket (#288) drops it: the writing key falls back to `GH_TOKEN`, the reading
- * key to `STATUS_TOKEN` (update-branch's) and then to `GH_TOKEN`. No function
- * here takes a key; each factory resolves both once, by `resolveKeys` below.
+ * The key choice lives here, not in any script. Two settled names (#288 dropped
+ * the old ones): the writing key is `FACTORY_PAT`, so its events fire, and the
+ * reading key, for the reads a fine-grained PAT cannot make (Actions runs and
+ * jobs, commit statuses), is `READ_TOKEN`. The old names each replaced
+ * (`GH_TOKEN` for writes, `STATUS_TOKEN` and `GH_TOKEN` for reads) are no longer
+ * read: a script wired with only the old names is refused with a clear error
+ * naming the key it is missing, rather than handed an empty token. No function
+ * here takes a key; each factory resolves what it uses once, by `resolveKeys`.
  *
  * Every function throws `GhError` on failure, the shape `lib/gh.ts` throws, a
  * read that answered with something other than JSON included. Which of those a
@@ -54,16 +55,33 @@ import { type Author } from "./trusted-authors.ts";
 import { GhError, gh } from "./gh.ts";
 
 /**
- * The two keys, resolved when a factory is built so no function names one (#281,
- * #282). `gh` reads its token from `GH_TOKEN`, so each env sets that slot to the
- * chosen key: the writing key prefers the new `FACTORY_PAT`, the reading key the
- * new `READ_TOKEN`, each falling back through the old names it replaces. Read
- * per call, not at import, so a script that sets its env late still gets the
- * right key. Shared by every factory below.
+ * A required key, or a clear failure. Returns an env with the key in `gh`'s own
+ * `GH_TOKEN` slot (that is how `gh` reads its token, not a factory input name).
+ * An unset key throws naming the missing var, rather than handing `gh` an empty
+ * token that fails later as an opaque 401 (#288).
  */
-const resolveKeys = (): { writeEnv: NodeJS.ProcessEnv; readEnv: NodeJS.ProcessEnv } => ({
-  writeEnv: { ...process.env, GH_TOKEN: process.env.FACTORY_PAT || process.env.GH_TOKEN },
-  readEnv: { ...process.env, GH_TOKEN: process.env.READ_TOKEN || process.env.STATUS_TOKEN || process.env.GH_TOKEN },
+const withKey = (name: "FACTORY_PAT" | "READ_TOKEN"): NodeJS.ProcessEnv => {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing required env var ${name}: the old fallback names were dropped in #288, so set ${name}.`);
+  return { ...process.env, GH_TOKEN: value };
+};
+
+/**
+ * The two keys, resolved when a factory is built so no function names one (#281,
+ * #282, #288). The writing key is `FACTORY_PAT`, the reading key `READ_TOKEN`;
+ * the old names are gone (#288). Each is a getter, so a factory pays for only
+ * the keys it destructures: the dispatcher takes `writeEnv` alone and never
+ * needs `READ_TOKEN` set, while the sweep, update-branch and retry take both.
+ * Read per build, not at import, so a script that sets its env late still gets
+ * the right key. Shared by every factory below.
+ */
+const resolveKeys = (): { readonly writeEnv: NodeJS.ProcessEnv; readonly readEnv: NodeJS.ProcessEnv } => ({
+  get writeEnv() {
+    return withKey("FACTORY_PAT");
+  },
+  get readEnv() {
+    return withKey("READ_TOKEN");
+  },
 });
 
 /** How many commits on `base` a head lacks, from the compare API. */
@@ -211,8 +229,8 @@ export const targetRepo = (repo: string, base: string): Needs => {
  *
  * The status key lives here, not in the script: commit statuses are the one read
  * and the one write a fine-grained PAT cannot make, so `statuses` and
- * `postStatus` use the reading key (`READ_TOKEN`, folding in update-branch's old
- * `STATUS_TOKEN`; #282). Everything else uses the writing key so the update
+ * `postStatus` use the reading key (`READ_TOKEN`; #288 dropped its old
+ * `STATUS_TOKEN` name). Everything else uses the writing key so the update
  * call's merge commit fires the `pull_request` event a fine-grained PAT needs
  * for CI to re-run.
  *
@@ -293,12 +311,12 @@ export const dispatchNeeds = (repo: string): DispatchNeeds => {
  * `retry/retry-run.ts` and handed to the handler; a test hands it an in-memory
  * target repo instead.
  *
- * The retry handler's two keys are still the ones it has always used, until
- * #282 unifies them: reads (labels, a PR, the open PR list, the branch, the
- * artifact) use the job's `GH_TOKEN` (its `GITHUB_TOKEN`, with checks: read);
- * writes (labels, comments, close, disarm) use `FACTORY_PAT` so their label
- * events fire. The choice lives here, not in the handler. Every function throws
- * `GhError`; which of those the handler shrugs off is its own policy.
+ * The retry handler's two keys are the two settled ones (#282, #288): reads
+ * (labels, a PR, the open PR list, the branch, the artifact) use the reading key
+ * `READ_TOKEN` (GITHUB_TOKEN, with checks: read); writes (labels, comments,
+ * close, disarm) use `FACTORY_PAT` so their label events fire. The choice lives
+ * here, not in the handler. Every function throws `GhError`; which of those the
+ * handler shrugs off is its own policy.
  *
  * The checks wait's reads (the head's statuses and check runs, a PR's
  * mergeability) are not here: they build the checks-path failure, which
@@ -306,10 +324,10 @@ export const dispatchNeeds = (repo: string): DispatchNeeds => {
  * (#285). They stay in `retry-run.ts`, beside the log and artifact reads.
  */
 export const retryTargetRepo = (repo: string, branch: string) => {
-  // The same two keys the sweep and update-branch resolve (#282): reads (a PR,
-  // the open PR list, labels, the branch, the artifact) use the reading key,
-  // writes (labels, comments, close, disarm) the writing one. The retry step
-  // now passes READ_TOKEN, so its reads no longer ride the writing key.
+  // The same two keys the sweep and update-branch resolve (#282, #288): reads (a
+  // PR, the open PR list, labels, the branch, the artifact) use the reading key
+  // READ_TOKEN, writes (labels, comments, close, disarm) the writing one
+  // FACTORY_PAT. The retry step passes both under their settled names.
   const { writeEnv, readEnv } = resolveKeys();
 
   // Structurally `retry.ts`'s `Subject`, named once here rather than re-inlined

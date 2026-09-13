@@ -6,15 +6,15 @@
  * writes are `retry.ts`'s; this file is the wiring, as `sweep-run.ts` is for the
  * sweep.
  *
- * Two keys (#282): the record's reads (a PR, the open PR list, labels, the
- * branch, the artifact) use the reading key (READ_TOKEN, falling back to the
- * old GH_TOKEN until #288), which needs checks: read and actions: read from the
- * caller; its writes (labels, comments, closing the PR) use the writing key
- * (FACTORY_PAT) so the labels fire events. The choice lives in `target-repo.ts`
- * (`resolveKeys`); the checks wait's own reads below still use GH_TOKEN
- * directly through the shared `gh`, their own token choice left to a later ticket.
+ * Two keys (#282, #288): the record's reads (a PR, the open PR list, labels, the
+ * branch, the artifact) use the reading key (READ_TOKEN), which needs checks:
+ * read and actions: read from the caller; its writes (labels, comments, closing
+ * the PR) use the writing key (FACTORY_PAT) so the labels fire events. The choice
+ * lives in `target-repo.ts` (`resolveKeys`); the checks wait's own reads below
+ * still use the job's GH_TOKEN directly through the shared `gh`, their own token
+ * choice left to a later ticket.
  *
- * Env: GH_REPO, READ_TOKEN (or GH_TOKEN), FACTORY_PAT, BRANCH, RUN_URL,
+ * Env: GH_REPO, READ_TOKEN, FACTORY_PAT, BRANCH, RUN_URL,
  * OUTPUT_DIR, one of ISSUE_NUMBER or PR_NUMBER, and FAILURE_KIND:
  * - `implement`: the implementer's attempt ended badly; the output is
  *   OUTPUT_DIR/failure_reason.txt plus the tail of the newest run log.
