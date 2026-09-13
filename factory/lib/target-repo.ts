@@ -330,7 +330,9 @@ export const retryTargetRepo = (repo: string, branch: string) => {
     openPrs: () =>
       ghJson(["pr", "list", "--repo", repo, "--state", "open", "--limit", "200", "--json", "number,body,headRefName,isCrossRepository"]),
     labelsOf: (on: Named) => ghJson([on.kind, "view", on.number, "--repo", repo, "--json", "labels", "--jq", "[.labels[].name]"]),
-    // A missing branch is a 404 gh throws for, which the handler reads as "gone".
+    // Throws GhError on any read failure, a missing branch (404) among them; the
+    // handler's `safeBranchExists` shrugs each off and reads the branch as gone,
+    // as the pre-seam `tryGh` did.
     branchExists: (): boolean => {
       gh(["api", `repos/${repo}/branches/${branch}`, "--jq", ".name"]);
       return true;
@@ -348,7 +350,11 @@ export const retryTargetRepo = (repo: string, branch: string) => {
     comment: (on: Named, body: string) => {
       const file = nodePath.join(os.tmpdir(), `retry-comment-${on.kind}-${on.number}-${process.pid}-${Date.now()}.md`);
       fs.writeFileSync(file, body);
-      gh([on.kind, "comment", on.number, "--repo", repo, "--body-file", file], writeEnv);
+      try {
+        gh([on.kind, "comment", on.number, "--repo", repo, "--body-file", file], writeEnv);
+      } finally {
+        fs.rmSync(file, { force: true });
+      }
     },
     ensureRetryLabel: (label: string) =>
       gh(["label", "create", label, "--repo", repo, "--color", "c5def5", "--description", "Factory: retries used on this ticket", "--force"], writeEnv),
