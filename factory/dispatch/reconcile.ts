@@ -222,6 +222,20 @@ export type MergeReads = {
   toldNoTicket: (pr: PrState) => boolean | undefined;
 };
 
+/**
+ * A run's role, the same kind of costly per-candidate fact as the merge reads
+ * (#307): a GitHub call per run to read its job names. The reconciler asks for
+ * one at the point it filters a subject's runs, so a subject a decision leaves
+ * alone before that point has its runs' roles left unread. The default reads
+ * the role off the run in the snapshot, which is how `reconcile.test.ts` drives
+ * the reconciler unchanged; the sweep passes a reader backed by its Needs
+ * record, `roleFromJobs(jobs(id))`, lazy and soft-failing behind it.
+ */
+export type RoleReader = (run: Run) => RunRole | undefined;
+
+/** Reads a run's role off the snapshot the caller already filled: the default the reconciler's own tests use. */
+const snapshotRole: RoleReader = (run) => run.role;
+
 /** Reads each merge-state fact off a snapshot the caller already filled: the default the reconciler's own tests use. */
 const snapshotReads: MergeReads = {
   verdict: (pr) => pr.verdict,
@@ -243,6 +257,23 @@ export const runsFor = (
   subject.kind === "issue"
     ? runs.filter((r) => r.event === "issues" && r.title.trim() === subject.title.trim())
     : runs.filter((r) => r.event === "pull_request_target" && r.headBranch === subject.headRef);
+
+/**
+ * A subject's runs that could cover its state: those whose role consumes the
+ * state, plus any whose role is unread. An unread role counts as covering while
+ * live, the sweep's soft-fail direction (#307); this is the one place that rule
+ * lives, and the reader is asked for a role only for the subject's own runs.
+ */
+const coveringRuns = (
+  subject: { kind: "issue"; title: string } | { kind: "pr"; headRef: string },
+  runs: readonly Run[],
+  readRole: RoleReader,
+  consumes: (role: RunRole) => boolean,
+): Run[] =>
+  runsFor(subject, runs).filter((r) => {
+    const role = readRole(r);
+    return role === undefined || consumes(role);
+  });
 
 const isUpdateBranchRun = (run: Run, base: string): boolean =>
   (run.event === "push" && run.headBranch === base) ||
@@ -398,14 +429,14 @@ const leftAloneDecision = (subject: Subject, labels: readonly string[], deadline
   return { subject, action: { type: "none" }, log: `#${subject.number} (${subject.kind}) ${state}, deadline ${deadline} min: ${why}` };
 };
 
-const decideTicket = (t: TicketState, snap: Snapshot, deadlines: Deadlines): Decision | undefined => {
+const decideTicket = (t: TicketState, snap: Snapshot, deadlines: Deadlines, readRole: RoleReader): Decision | undefined => {
   const has = (l: string) => t.labels.includes(l);
   if (!has("agent:implement") && !has("agent:in-progress")) return undefined;
   const subject: Subject = { kind: "issue", number: t.number };
   const untouched = leftAloneDecision(subject, t.labels, deadlines.stuckMinutes, heldBy(t.labels, undefined));
   if (untouched) return untouched;
   const state = has("agent:in-progress") ? "agent:in-progress" : "agent:implement";
-  const runs = runsFor({ kind: "issue", title: t.title }, snap.runs).filter((r) => r.role === undefined || r.role === "implement");
+  const runs = coveringRuns({ kind: "issue", title: t.title }, snap.runs, readRole, (role) => role === "implement");
   return decideStuck(
     { subject, state, since: t.stateSince, marks: t.marks, runs, expected: "implement run", labels: t.labels, add: "agent:implement" },
     snap,
@@ -419,13 +450,13 @@ const PR_STATES: readonly { label: string; roles: readonly RunRole[]; expected: 
   { label: "agent:implement", roles: ["implement-pr"], expected: "implement-pr run", add: "agent:implement" },
 ];
 
-const decidePrLabel = (p: PrState, snap: Snapshot, deadlines: Deadlines, held: string | undefined): Decision | undefined => {
+const decidePrLabel = (p: PrState, snap: Snapshot, deadlines: Deadlines, held: string | undefined, readRole: RoleReader): Decision | undefined => {
   const state = PR_STATES.find((s) => p.labels.includes(s.label));
   if (!state) return undefined;
   const subject: Subject = { kind: "pr", number: p.number };
   const untouched = leftAloneDecision(subject, p.labels, deadlines.stuckMinutes, held);
   if (untouched) return untouched;
-  const runs = runsFor({ kind: "pr", headRef: p.headRef }, snap.runs).filter((r) => r.role === undefined || state.roles.includes(r.role));
+  const runs = coveringRuns({ kind: "pr", headRef: p.headRef }, snap.runs, readRole, (role) => state.roles.includes(role));
   return decideStuck(
     { subject, state: state.label, since: p.stateSince, marks: p.marks, runs, expected: state.expected, labels: p.labels, add: state.add, ticket: p.closes },
     snap,
@@ -658,15 +689,21 @@ const decidePrMerge = (p: PrState, snap: Snapshot, deadlines: Deadlines, held: s
 };
 
 /** One decision per candidate, in tracker order: tickets, then PRs by label, then PRs by merge state. */
-export const reconcile = (snap: Snapshot, deadlines: Deadlines, policy: TrustPolicy, reads: MergeReads = snapshotReads): Decision[] => {
+export const reconcile = (
+  snap: Snapshot,
+  deadlines: Deadlines,
+  policy: TrustPolicy,
+  reads: MergeReads = snapshotReads,
+  readRole: RoleReader = snapshotRole,
+): Decision[] => {
   const decisions: Decision[] = [];
   for (const t of snap.issues) {
-    const d = decideTicket(t, snap, deadlines);
+    const d = decideTicket(t, snap, deadlines, readRole);
     if (d) decisions.push(d);
   }
   for (const p of snap.prs) {
     const held = heldBy(p.labels, snap.issues.find((t) => t.number === p.closes));
-    const d = decidePrLabel(p, snap, deadlines, held) ?? decidePrMerge(p, snap, deadlines, held, policy, reads);
+    const d = decidePrLabel(p, snap, deadlines, held, readRole) ?? decidePrMerge(p, snap, deadlines, held, policy, reads);
     if (d) decisions.push(d);
   }
   return decisions;

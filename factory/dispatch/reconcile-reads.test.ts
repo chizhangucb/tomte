@@ -21,6 +21,9 @@ import {
   DEFAULT_DEADLINES,
   type MergeReads,
   type PrState,
+  type RoleReader,
+  type Run,
+  type RunRole,
   type Snapshot,
   type TicketState,
   type VerdictState,
@@ -131,6 +134,76 @@ test("a candidate a decision leaves alone before any costly branch reads nothing
   const ds = reconcile(snapshot(prs), DEFAULT_DEADLINES, POLICY, reads);
   assert.deepEqual(log, []);
   assert.deepEqual(ds.filter((d) => d.action.type !== "none"), []);
+});
+
+/**
+ * A run's role is the same kind of costly, per-candidate fact (#307): the
+ * reconciler asks for it at the point it filters a subject's runs, so a subject
+ * a decision leaves alone before that point has its runs' roles left unread.
+ * Before #307 the sweep pre-walked the labelled subjects and `runsFor` to fill
+ * `run.role`, and `reconcile` had no role reader; these are red on that revision.
+ */
+const countingRole = (log: string[], roles: Record<number, RunRole>): RoleReader => (run) => {
+  log.push(`role:${run.id}`);
+  return roles[run.id];
+};
+
+const stuckTicket = (number: number, overrides: Partial<TicketState> = {}): TicketState => ({
+  number,
+  title: `Ticket ${number}`,
+  labels: ["ready-for-agent", "agent:in-progress"],
+  stateSince: minutesAgo(40),
+  marks: [],
+  ...overrides,
+});
+
+const issueRun = (id: number, title: string, overrides: Partial<Run> = {}): Run => ({
+  id,
+  event: "issues",
+  title,
+  headBranch: "main",
+  status: "completed",
+  conclusion: "failure",
+  createdAt: minutesAgo(35),
+  updatedAt: minutesAgo(35),
+  role: undefined,
+  ...overrides,
+});
+
+test("the reconciler reads a run's role at the run filter, and not for a subject it leaves alone", () => {
+  const stuck = stuckTicket(1);
+  const parked = stuckTicket(2, { labels: ["needs-human", "agent:in-progress"] });
+  const snap: Snapshot = {
+    now: NOW,
+    base: "main",
+    issues: [stuck, parked],
+    prs: [],
+    runs: [issueRun(100, "Ticket 1"), issueRun(200, "Ticket 2")],
+  };
+  const log: string[] = [];
+  const ds = reconcile(snap, DEFAULT_DEADLINES, POLICY, undefined, countingRole(log, { 100: "implement", 200: "implement" }));
+  // The parked ticket's run (200) is never role-read; only the stuck ticket's (100).
+  assert.deepEqual(log, ["role:100"]);
+  assert.deepEqual(
+    ds.filter((d) => d.action.type !== "none").map((d) => d.action),
+    [{ type: "relabel", remove: ["agent:in-progress"], add: "agent:implement", miss: 1 }],
+  );
+});
+
+test("a run's role read lazily reaches the same decision as one already on the snapshot", () => {
+  const cases: { role: RunRole; conclusion: string }[] = [
+    { role: "implement", conclusion: "failure" },
+    { role: "review", conclusion: "failure" },
+    { role: "none", conclusion: "success" },
+  ];
+  for (const { role, conclusion } of cases) {
+    const t = stuckTicket(1);
+    const runs = [issueRun(100, "Ticket 1", { conclusion })];
+    const base: Omit<Snapshot, "runs"> = { now: NOW, base: "main", issues: [t], prs: [] };
+    const lazy = reconcile({ ...base, runs }, DEFAULT_DEADLINES, POLICY, undefined, countingRole([], { 100: role }));
+    const eager = reconcile({ ...base, runs: [{ ...runs[0]!, role }] }, DEFAULT_DEADLINES, POLICY);
+    assert.deepEqual(lazy, eager, role);
+  }
 });
 
 test("reading a fact lazily reaches the same decision as reading it up front", () => {

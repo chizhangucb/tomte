@@ -28,15 +28,15 @@ import {
   type MergeReads,
   type PrComment,
   type PrState,
+  type RoleReader,
   type Run,
+  type RunRole,
   type Snapshot,
   type Subject,
   type TicketState,
   type VerdictState,
-  leftAlone,
   reconcile,
   roleFromJobs,
-  runsFor,
   toldNoTicketIn,
 } from "./reconcile.ts";
 
@@ -195,27 +195,30 @@ export const sweep = (needs: Needs, config: SweepConfig): SweepResult => {
   });
 
   const lookbackMinutes = Math.max(deadlines.stuckMinutes, deadlines.verdictMinutes, deadlines.updateMinutes) + 30;
-  /** Only the runs that could cover a labeled subject need their jobs read. */
-  const labeled = (labels: readonly string[]): boolean => labels.some((l) => l.startsWith("agent:")) && !leftAlone(labels);
 
-  const readRuns = (issues: readonly TicketState[], prs: readonly PrState[]): Run[] => {
-    const since = new Date(now.getTime() - lookbackMinutes * 60_000).toISOString();
-    const runs = needs.recentRuns(since);
-    const subjects = [
-      ...issues.filter((t) => labeled(t.labels)).map((t) => ({ kind: "issue" as const, title: t.title })),
-      ...prs.filter((p) => labeled(p.labels)).map((p) => ({ kind: "pr" as const, headRef: p.headRef })),
-    ];
-    for (const subject of subjects) {
-      for (const r of runsFor(subject, runs)) {
-        if (r.role !== undefined) continue;
-        try {
-          r.role = roleFromJobs(needs.jobs(r.id));
-        } catch (error) {
-          console.log(`::warning::Could not read the jobs of run ${r.id}; treating it as covering while live: ${errorMessage(error)}`);
-        }
+  /**
+   * A run's role, backed by the Needs record and lazy: the reconciler asks for
+   * one at the branch that filters a subject's runs (#307), so a subject a
+   * decision leaves alone before that branch reads no run's jobs. Pre-walking
+   * which runs to read for is no longer this script's job.
+   *
+   * The soft-fail policy stays here, as it did when `readRuns` set the role: a
+   * run whose jobs cannot be read has an unread role and, being undefined,
+   * counts as covering while live, exactly as before. Read once per run.
+   */
+  const roleReader = (): RoleReader => {
+    const cache = new Map<number, RunRole | undefined>();
+    return (run) => {
+      if (cache.has(run.id)) return cache.get(run.id);
+      let role: RunRole | undefined;
+      try {
+        role = roleFromJobs(needs.jobs(run.id));
+      } catch (error) {
+        console.log(`::warning::Could not read the jobs of run ${run.id}; treating it as covering while live: ${errorMessage(error)}`);
       }
-    }
-    return runs;
+      cache.set(run.id, role);
+      return role;
+    };
   };
 
   const readSnapshot = (): { snapshot: Snapshot; createdAt: Map<number, string> } => {
@@ -223,7 +226,8 @@ export const sweep = (needs: Needs, config: SweepConfig): SweepResult => {
     const open = needs.openPrs();
     const prs = open.map((o) => o.pr);
     const createdAt = new Map(open.map((o) => [o.pr.number, o.createdAt]));
-    return { snapshot: { now: now.toISOString(), base, issues, prs, runs: readRuns(issues, prs), sweepUrl: runUrl }, createdAt };
+    const since = new Date(now.getTime() - lookbackMinutes * 60_000).toISOString();
+    return { snapshot: { now: now.toISOString(), base, issues, prs, runs: needs.recentRuns(since), sweepUrl: runUrl }, createdAt };
   };
 
   /* A failed hard read aborts the pass: a partial snapshot, or a costly read the
@@ -235,7 +239,7 @@ export const sweep = (needs: Needs, config: SweepConfig): SweepResult => {
   try {
     const read = readSnapshot();
     snapshot = read.snapshot;
-    decisions = reconcile(snapshot, deadlines, policy, mergeReads(read.createdAt));
+    decisions = reconcile(snapshot, deadlines, policy, mergeReads(read.createdAt), roleReader());
   } catch (error) {
     if (!(error instanceof GhError)) throw error;
     const aborted = `Sweep of ${repo} aborted before repairing anything: ${error.message}`;
