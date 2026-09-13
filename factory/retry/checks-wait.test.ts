@@ -62,7 +62,7 @@ const checksNeeds = (clock: ReturnType<typeof fakeClock>, overrides: Partial<Che
   sleep: clock.sleep,
   readChecks: () => pending(["slow-ci"]),
   prMergeability: () => undefined,
-  failureOutput: async () => "log tail",
+  failuresOutput: async () => "log tail",
   ...overrides,
 });
 

@@ -181,7 +181,7 @@ export interface ChecksNeeds {
   /** The open PR's mergeability and base; undefined once it is no longer open (it closed or merged mid-wait). */
   readonly prMergeability: (pr: OpenPr) => PrMergeability | undefined;
   /** The failing checks' output, joined; the log and artifact reads behind it stay in the entry point. */
-  readonly failureOutput: (failures: readonly CheckFailure[]) => Promise<string>;
+  readonly failuresOutput: (failures: readonly CheckFailure[]) => Promise<string>;
 }
 
 /** The head and the clock bounds of one wait, read from the env by the entry point. */
@@ -226,7 +226,7 @@ export const waitForChecks = async (
   return {
     kind: first.kind,
     summary: summariseFailures(failures),
-    output: await needs.failureOutput(failures),
+    output: await needs.failuresOutput(failures),
     unretryable: unretryableReason(failures),
   };
 };

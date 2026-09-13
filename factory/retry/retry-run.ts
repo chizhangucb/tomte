@@ -256,7 +256,7 @@ const checksNeeds = (): ChecksNeeds => ({
   sleep,
   readChecks: (sha) => headChecks(sha),
   prMergeability: (pr) => mergeabilityOf(pr),
-  failureOutput: failuresOutput,
+  failuresOutput,
 });
 
 /** The head and the clock bounds of the wait, the workflow's `HEAD_SHA` and timeout. */
