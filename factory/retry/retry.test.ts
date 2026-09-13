@@ -12,11 +12,14 @@
  * (`retry-run.ts`) assembles from GitHub before it calls `main`.
  */
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { test } from "node:test";
 
 import { GhError } from "../lib/gh.ts";
-import { BLOCKED_LABEL, ESCALATION_LABEL, IMPLEMENT_LABEL } from "../lib/labels.ts";
-import { MAX_RETRIES, RATE_LIMITED_REASON, type Subject } from "./decide.ts";
+import { BLOCKED_LABEL, ESCALATION_LABEL, IMPLEMENT_LABEL, IN_PROGRESS_LABEL } from "../lib/labels.ts";
+import { MAX_RETRIES, RATE_LIMITED_REASON, REQUEUED_FILE, type Subject } from "./decide.ts";
 import {
   type Failure,
   type OpenPr,
@@ -24,6 +27,7 @@ import {
   type RetryNeeds,
   type Target,
   main,
+  resolveTarget,
 } from "./retry.ts";
 
 /** One recorded write, so a test asserts on what the handler wrote and never on a `gh` command. */
@@ -180,4 +184,134 @@ test("a soft write that fails is logged and the run continues", () => {
   // And the run carried on: the ticket was still parked and commented.
   assert.ok(writes.some((w) => w.op === "addLabel" && w.on.kind === "issue" && w.label === ESCALATION_LABEL));
   assert.ok(writes.some((w) => w.op === "comment" && w.on.kind === "issue" && w.on.number === "7"));
+});
+
+/* What `main` applies, and what it resolves, through the record rather than through `retry.ts`'s source (#310). */
+
+/** The output dir the marker file lands in, a fresh one per call, and the path it was written to. */
+const inOutputDir = (run: () => void): string => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "retry-"));
+  const previous = process.env.OUTPUT_DIR;
+  process.env.OUTPUT_DIR = dir;
+  try {
+    run();
+  } finally {
+    if (previous === undefined) delete process.env.OUTPUT_DIR;
+    else process.env.OUTPUT_DIR = previous;
+  }
+  return dir;
+};
+
+test("a requeued PR keeps the label the reconciler sweeps and leaves the marker file behind", () => {
+  const { needs, writes } = inMemory({ labelsOf: labels(["ready-for-agent"], ["agent:review"]) });
+  const dir = inOutputDir(() =>
+    main(needs, config({ failureKind: "checks" }), { issue: "7", pr: factoryPr }, failure({
+      requeue: RATE_LIMITED_REASON,
+      mergeability: { pr: factoryPr, mergeable: "MERGEABLE", base: "main" },
+    })),
+  );
+  assert.deepEqual(
+    writes.map((w) => (w.op === "addLabel" ? `addLabel ${w.on.kind}#${w.on.number} ${w.label}` : w.op)),
+    ["comment", `addLabel pr#12 ${IN_PROGRESS_LABEL}`],
+  );
+  // Nothing for a human, and the marker the workflow's last step reads (#148).
+  assert.ok(!writes.some((w) => w.op === "addLabel" && w.label === BLOCKED_LABEL));
+  assert.equal(fs.readFileSync(path.join(dir, REQUEUED_FILE), "utf8"), `${RATE_LIMITED_REASON}\n`);
+});
+
+test("a hold on the open PR stands the run down, and it is read before anything is decided", () => {
+  const read: string[] = [];
+  const { needs, writes } = inMemory({
+    labelsOf: (on) => {
+      read.push(`${on.kind}#${on.number}`);
+      return on.kind === "issue" ? ["ready-for-agent"] : ["agent:review", "hold"];
+    },
+  });
+  inOutputDir(() => main(needs, config(), { issue: "7", pr: factoryPr }, failure()));
+  // Both subjects are read before a decision: the label a retry adds goes on the PR.
+  assert.deepEqual(read, ["issue#7", "pr#12"]);
+  // A stand-down starts nothing and escalates nothing: the comment on the thread
+  // the hold is on, and the PR left where a requeue leaves one (#148, #185).
+  assert.deepEqual(
+    writes.map((w) => (w.op === "addLabel" ? `addLabel ${w.on.kind}#${w.on.number} ${w.label}` : `${w.op} ${w.op === "comment" ? `${w.on.kind}#${w.on.number}` : ""}`)),
+    ["comment pr#12", `addLabel pr#12 ${IN_PROGRESS_LABEL}`],
+  );
+  assert.ok(!writes.some((w) => w.op === "ensureRetryLabel" || w.op === "removeLabel"));
+});
+
+test("a conflict hand-off labels the PR and names the base it was read at, without a throw", () => {
+  const { needs, writes } = inMemory({ labelsOf: labels(["ready-for-agent"], ["agent:in-progress"]) });
+  main(needs, config({ failureKind: "checks" }), { issue: "7", pr: factoryPr }, failure({
+    kind: "ci",
+    requeue: "check still pending after 15 minutes; not the ticket's failure",
+    mergeability: { pr: factoryPr, mergeable: "CONFLICTING", base: "main" },
+  }));
+  assert.deepEqual(
+    writes.map((w) => (w.op === "addLabel" ? `addLabel ${w.on.kind}#${w.on.number} ${w.label}` : `${w.op} ${w.op === "comment" ? `${w.on.kind}#${w.on.number}` : ""}`)),
+    ["comment pr#12", `addLabel pr#12 ${IMPLEMENT_LABEL}`],
+  );
+  assert.match(writes[0]!.op === "comment" ? writes[0]!.body : "", /merges `main` into the branch/);
+  // No retry spent on a conflict: the checks never came, so nothing of the ticket's failed.
+  assert.ok(!writes.some((w) => w.op === "ensureRetryLabel"));
+});
+
+test("a label the repo refuses to create is logged and the retry still lands", () => {
+  const { needs, writes } = inMemory({
+    labelsOf: labels(["ready-for-agent"]),
+    ensureRetryLabel: () => {
+      throw new GhError(["label", "create"], new Error("already exists"));
+    },
+  });
+  const log = capturingLog();
+  try {
+    main(needs, config(), { issue: "7", pr: undefined }, failure());
+  } finally {
+    log.restore();
+  }
+  assert.ok(log.lines.some((line) => line.includes("already exists")));
+  assert.ok(writes.some((w) => w.op === "addLabel" && w.label === "factory:retry-1"));
+  assert.ok(writes.some((w) => w.op === "addLabel" && w.label === IMPLEMENT_LABEL));
+});
+
+/** The workflow inputs one resolution reads, set for the call and put back after it. */
+const withInputs = <T>(inputs: Record<string, string | undefined>, run: () => T): T => {
+  const previous = Object.fromEntries(Object.keys(inputs).map((key) => [key, process.env[key]]));
+  // Assigned, never `Object.assign`: an undefined input has to be an unset one,
+  // and assigning undefined to `process.env` sets the string "undefined".
+  for (const [key, value] of Object.entries(inputs)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    return run();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+};
+
+const listed = (number: number, headRefName: string, body: string, isCrossRepository = false) => ({
+  number,
+  headRefName,
+  body,
+  isCrossRepository,
+});
+
+test("a ticket's open PR is the one on the run's branch, and a fork's namesake is not it", () => {
+  const own = listed(13, "agent/issue-7-x", "Implemented by the software factory.\n\nCloses #7");
+  const { needs } = inMemory({
+    openPrs: () => [listed(12, "agent/issue-7-x", "Closes #7", true), listed(14, "someone/fix-7", "Closes #7"), own],
+  });
+  const target = withInputs({ ISSUE_NUMBER: "7", PR_NUMBER: undefined, BRANCH: "agent/issue-7-x" }, () => resolveTarget(needs));
+  // The run's own PR, and `fromFork` with it: the fact `ticketOrPrFromTicket`
+  // rejected the namesake fork on (#204).
+  assert.deepEqual(target, { issue: "7", pr: { number: "13", fromFork: false, facts: { headRef: own.headRefName, body: own.body } } });
+});
+
+test("a PR handed over by number is the subject on whatever branch it is", () => {
+  const { needs } = inMemory({ viewPr: () => ({ state: "OPEN", body: "Closes #7", headRefName: "maintainer/flaky-login" }) });
+  const target = withInputs({ PR_NUMBER: "12", ISSUE_NUMBER: undefined, BRANCH: "agent/issue-7-x" }, () => resolveTarget(needs));
+  assert.deepEqual(target, { issue: "7", pr: { number: "12", facts: { headRef: "maintainer/flaky-login", body: "Closes #7" } } });
 });
