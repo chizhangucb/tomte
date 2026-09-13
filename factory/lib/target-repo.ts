@@ -321,8 +321,9 @@ export const dispatchNeeds = (repo: string): DispatchNeeds => {
  *
  * The checks wait's reads (the head's statuses and check runs, a PR's
  * mergeability) are not here: they build the checks-path failure, which
- * `retry-run.ts` assembles into a `ChecksNeeds` record for `waitForChecks`
- * (#285). They stay in `retry-run.ts`, beside the log and artifact reads.
+ * `retry/assemble.ts` turns into the `ChecksNeeds` record `waitForChecks` runs
+ * on (#285). They have their own record and their own production adapter,
+ * `retry/run-needs.ts` (#315), beside the log and artifact reads.
  */
 export const retryTargetRepo = (repo: string, branch: string) => {
   // The same two keys the sweep and update-branch resolve (#282, #288): reads (a
