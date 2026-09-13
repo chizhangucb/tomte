@@ -317,7 +317,11 @@ export const retryTargetRepo = (repo: string, branch: string) => {
     }
   };
 
-  const subject = (on: { readonly kind: "issue" | "pr"; readonly number: string }, args: string[]): void => {
+  // Structurally `retry.ts`'s `Subject`, named once here rather than re-inlined
+  // per call. Not imported: `decide.ts`, where `Subject` lives, is not on the
+  // bare-node cone the sweep's entry reaches through this module.
+  type Named = { readonly kind: "issue" | "pr"; readonly number: string };
+  const edit = (on: Named, args: string[]): void => {
     gh([on.kind, "edit", on.number, "--repo", repo, ...args], writeEnv);
   };
 
@@ -325,8 +329,7 @@ export const retryTargetRepo = (repo: string, branch: string) => {
     viewPr: (number: string) => ghJson(["pr", "view", number, "--repo", repo, "--json", "state,body,headRefName"]),
     openPrs: () =>
       ghJson(["pr", "list", "--repo", repo, "--state", "open", "--limit", "200", "--json", "number,body,headRefName,isCrossRepository"]),
-    labelsOf: (on: { readonly kind: "issue" | "pr"; readonly number: string }) =>
-      ghJson([on.kind, "view", on.number, "--repo", repo, "--json", "labels", "--jq", "[.labels[].name]"]),
+    labelsOf: (on: Named) => ghJson([on.kind, "view", on.number, "--repo", repo, "--json", "labels", "--jq", "[.labels[].name]"]),
     // A missing branch is a 404 gh throws for, which the handler reads as "gone".
     branchExists: (): boolean => {
       gh(["api", `repos/${repo}/branches/${branch}`, "--jq", ".name"]);
@@ -339,10 +342,10 @@ export const retryTargetRepo = (repo: string, branch: string) => {
       const id = gh(["api", `repos/${repo}/actions/runs/${runId}/artifacts`, "--jq", `.artifacts[] | select(.name == "${name}") | .id`]).trim();
       return id ? `https://github.com/${repo}/actions/runs/${runId}/artifacts/${id}` : undefined;
     },
-    addLabel: (on: { readonly kind: "issue" | "pr"; readonly number: string }, label: string) => subject(on, ["--add-label", label]),
-    removeLabel: (on: { readonly kind: "issue" | "pr"; readonly number: string }, label: string) => subject(on, ["--remove-label", label]),
+    addLabel: (on: Named, label: string) => edit(on, ["--add-label", label]),
+    removeLabel: (on: Named, label: string) => edit(on, ["--remove-label", label]),
     // A body-file, not --body: an escalation comment carries the failing output and can outrun the arg limit.
-    comment: (on: { readonly kind: "issue" | "pr"; readonly number: string }, body: string) => {
+    comment: (on: Named, body: string) => {
       const file = nodePath.join(os.tmpdir(), `retry-comment-${on.kind}-${on.number}-${process.pid}-${Date.now()}.md`);
       fs.writeFileSync(file, body);
       gh([on.kind, "comment", on.number, "--repo", repo, "--body-file", file], writeEnv);
