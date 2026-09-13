@@ -19,6 +19,20 @@ import { HOLD_LABEL, HOLD_LABELS } from "../lib/labels.ts";
 
 const onboard = fileURLToPath(new URL("../../scripts/onboard.sh", import.meta.url));
 const target = "chizhangucb/tomte-fixture";
+
+/**
+ * The spec-title rule onboarding ensures is in the target's issue-tracker.md (#296).
+ * Pinned to the bytes onboard.sh writes: a change to either side goes red here.
+ */
+const SPEC_TITLE_BULLET =
+  "- **A spec title starts `Spec:`**: prefix it after `/to-spec` publishes. The dispatcher skips any `Spec:` issue, sliced or not (#296).";
+/** A target's issue-tracker.md that already carries the rule, the case a re-run meets. */
+const ISSUE_TRACKER_WITH_RULE = `# Issue tracker\n\n## Tickets\n\n- **Create**: gh issue create\n${SPEC_TITLE_BULLET}\n\n## Pull requests\n\nblah\n`;
+/**
+ * One without it, in the standard Matt's-skills layout where `## Tickets` is not the last
+ * section. The bullet must land under Tickets, not at end-of-file under a later heading.
+ */
+const ISSUE_TRACKER_WITHOUT_RULE = `# Issue tracker\n\n## Tickets\n\n- **Create**: gh issue create\n- **Close**: gh issue close\n\n## Pull requests\n\nblah\n\n## Wayfinding\n\nmore\n`;
 const factoryChecks = ["factory/verdict", "factory/red-green", "factory/test-integrity"];
 
 /**
@@ -47,8 +61,13 @@ case "$args" in
   "label create"*) ;;
   "repo edit"*) ;;
   "api --method POST"*) cat > "$GH_PAYLOAD"; echo 4242 ;;
+  "api --method PUT"*contents/docs/agents/issue-tracker.md*) cat > "$GH_IT_PAYLOAD" ;;
   "api --method PUT"*contents/*) cat > "$GH_FILE_PAYLOAD" ;;
   "api --method PUT"*)  cat > "$GH_PAYLOAD" ;;
+  *"contents/docs/agents/issue-tracker.md")
+    if [ "\${GH_ISSUE_TRACKER_MISSING:-}" = "true" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
+    if [ -n "\${GH_ISSUE_TRACKER_ERROR:-}" ]; then echo "$GH_ISSUE_TRACKER_ERROR" >&2; exit 1; fi
+    printf '{"sha":"deadbeef","content":"%s"}\\n' "$(printf '%s' "$GH_ISSUE_TRACKER" | base64 | tr -d '\\n')" ;;
   "api -H Accept: application/vnd.github.raw"*)
     name="\${args##*/}"
     if [ "$name" = "factory.yml" ] && [ -n "\${GH_CALLER_ERROR:-}" ]; then echo "$GH_CALLER_ERROR" >&2; exit 1; fi
@@ -89,15 +108,24 @@ type OnboardOptions = {
   rulesetsError?: string;
   /** The target's `.github/workflows`, by file name, as the raw fetch would return them. */
   workflows?: Record<string, string>;
+  /**
+   * The target's `docs/agents/issue-tracker.md` content. Undefined defaults to a file that
+   * already carries the spec-title rule, the case every other test wants (no extra write).
+   * `null` makes the read 404, the un-set-up target onboarding refuses.
+   */
+  issueTracker?: string | null;
+  /** When set, the read of that file fails with this text, the way a rate limit does. */
+  issueTrackerError?: string;
 };
 
 /** A temp directory holding the stub `gh`, and the environment that reaches it. */
 const sandbox = (options: OnboardOptions = {}) => {
-  const { existingRulesetId, hasCaller = true, callerError, ruleset, rulesetError, rulesetsError, workflows } = options;
+  const { existingRulesetId, hasCaller = true, callerError, ruleset, rulesetError, rulesetsError, workflows, issueTracker, issueTrackerError } = options;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "onboard-"));
   fs.writeFileSync(path.join(dir, "gh"), stubGh, { mode: 0o755 });
   const payloadFile = path.join(dir, "payload.json");
   const filePayloadFile = path.join(dir, "file-payload.json");
+  const itPayloadFile = path.join(dir, "it-payload.json");
   const callsFile = path.join(dir, "calls.tsv");
   // The target's workflow directory, as files the stub serves. A caller is one of them, so
   // `hasCaller` puts a factory.yml there unless the test named its own.
@@ -109,12 +137,17 @@ const sandbox = (options: OnboardOptions = {}) => {
     dir,
     payloadFile,
     filePayloadFile,
+    itPayloadFile,
     callsFile,
     env: {
       ...process.env,
       PATH: `${dir}:${process.env.PATH}`,
       GH_PAYLOAD: payloadFile,
       GH_CALLS: callsFile,
+      GH_IT_PAYLOAD: itPayloadFile,
+      GH_ISSUE_TRACKER: issueTracker === null ? "" : issueTracker ?? ISSUE_TRACKER_WITH_RULE,
+      GH_ISSUE_TRACKER_MISSING: issueTracker === null ? "true" : "",
+      GH_ISSUE_TRACKER_ERROR: issueTrackerError ?? "",
       // Pinned rather than omitted: an ambient GH_EXISTING_ID would otherwise put the
       // create-path tests silently on the update path. Naming the ruleset's contexts is
       // itself saying the target has one, so that case picks an id without repeating it.
@@ -204,6 +237,8 @@ type Run = {
   calls: string[][];
   /** The starter CI file the run wrote to the target, or undefined when it wrote none. */
   starterFile?: { path: string; content: string };
+  /** The docs/agents/issue-tracker.md content the run committed, or undefined when it wrote none. */
+  issueTrackerWrite?: string;
 };
 
 /**
@@ -241,6 +276,9 @@ const onboardWith = (ownChecks: string[], options: OnboardOptions = {}): Run => 
       labels: createdLabels(calls),
       calls,
       starterFile: starterFile(box.filePayloadFile, calls),
+      issueTrackerWrite: fs.existsSync(box.itPayloadFile)
+        ? Buffer.from(JSON.parse(fs.readFileSync(box.itPayloadFile, "utf8")).content, "base64").toString("utf8")
+        : undefined,
     };
   } finally {
     fs.rmSync(box.dir, { recursive: true, force: true });
@@ -971,4 +1009,63 @@ test("a caller's single-quoted input reaches the starter file as its value, not 
   const { starterFile } = onboardWith([], { workflows: { "factory.yml": caller } });
   assert.match(starterFile!.content, /node-version: "24"/);
   assert.doesNotMatch(starterFile!.content, /keep in step|'24'/);
+});
+
+/**
+ * The spec-title rule (#296). Onboarding ensures the target's docs/agents/issue-tracker.md
+ * carries the bullet that says a spec title starts `Spec:`, refusing before any write if the
+ * file is absent (the target is not set up with Matt's skills yet), and writing nothing when
+ * the rule is already there.
+ */
+const NOT_SET_UP_MESSAGE = [
+  `## ${target} has no docs/agents/issue-tracker.md, so it isn't set up with Matt's skills yet.`,
+  "## Set it up in that repo's clone, then re-onboard:",
+  "##   /mattpocock-skills:setup-matt-pocock-skills",
+  `##   scripts/onboard.sh ${target}`,
+];
+
+test("a target with no docs/agents/issue-tracker.md is refused, before any write", () => {
+  const run = onboardWith(["check"], { issueTracker: null });
+  assert.notEqual(run.code, 0);
+  assert.match(run.output, /REFUSED/);
+  for (const line of NOT_SET_UP_MESSAGE) {
+    assert.ok(run.output.includes(line), `the refusal must carry, verbatim:\n${line}\ngot:\n${run.output}`);
+  }
+  assert.deepEqual(writes(run.calls), [], "a refusal writes nothing at all");
+  assert.equal(run.issueTrackerWrite, undefined, "and no file reached the target");
+});
+
+test("a target whose issue-tracker.md lacks the spec-title rule has it added", () => {
+  const run = onboardWith(["check"], { issueTracker: ISSUE_TRACKER_WITHOUT_RULE });
+  assert.equal(run.code, 0, run.output);
+  assert.ok(run.issueTrackerWrite, "onboarding writes the file when the rule is missing");
+  assert.ok(run.issueTrackerWrite!.includes(SPEC_TITLE_BULLET), "the bullet, verbatim");
+  assert.ok(run.issueTrackerWrite!.includes("- **Create**: gh issue create"), "and the file's own content is kept");
+  // Placement: under `## Tickets`, not at end-of-file beneath a later heading.
+  const written = run.issueTrackerWrite!;
+  const bulletAt = written.indexOf(SPEC_TITLE_BULLET);
+  const ticketsAt = written.indexOf("## Tickets");
+  const nextHeadingAt = written.indexOf("## Pull requests");
+  assert.ok(bulletAt > ticketsAt && bulletAt < nextHeadingAt, "the bullet sits inside the Tickets section");
+});
+
+test("a target that already carries the rule is left untouched: onboarding is idempotent", () => {
+  const run = onboardWith(["check"], { issueTracker: ISSUE_TRACKER_WITH_RULE });
+  assert.equal(run.code, 0);
+  assert.equal(run.issueTrackerWrite, undefined, "the rule is there, so nothing is written and it is not duplicated");
+});
+
+test("the default target read carries the rule, so the rest of the suite provokes no extra write", () => {
+  // The suite's default issue-tracker.md is the with-rule one, so every other test's run
+  // makes no issue-tracker write and its `writes`/`starterFile` assertions still hold.
+  const run = onboardWith(["check"]);
+  assert.equal(run.issueTrackerWrite, undefined);
+});
+
+test("a read of issue-tracker.md that fails for a reason other than 404 aborts, not a spurious write", () => {
+  const run = onboardWith(["check"], { issueTrackerError: "gh: API rate limit exceeded (HTTP 403)" });
+  assert.notEqual(run.code, 0);
+  assert.match(run.output, /rate limit/i, "the real gh error reaches the maintainer");
+  assert.deepEqual(writes(run.calls), []);
+  assert.equal(run.issueTrackerWrite, undefined);
 });

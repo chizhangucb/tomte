@@ -31,6 +31,8 @@ export const FACTORY_STATE_LABELS = [
 
 export type DispatchIssue = {
   number: number;
+  /** The issue title. A title starting `Spec:` is a spec, not a ticket. */
+  title: string;
   /** The ticket body, where its acceptance criteria live. */
   body: string | null;
   /** Absent in a listing of open issues; set from a single-issue re-read. */
@@ -103,6 +105,10 @@ export const whySkipped = (
   if (issue.openBlockers > 0) {
     return `${issue.openBlockers} open blocker${issue.openBlockers === 1 ? "" : "s"}`;
   }
+  // A spec is not a ticket, sliced or not: once `/to-tickets` runs it has
+  // sub-issues, but between `/to-spec` and that it has none and only its title
+  // says so. Title or sub-issues, either one is a spec.
+  if (issue.title.trim().toLowerCase().startsWith("spec:")) return "spec: title, not a ticket";
   if ((issue.subIssues ?? 0) > 0) return "has sub-issues, not a ticket";
   if (issue.hasOpenPr) return "an open PR already closes it";
   // Last, and structural only: every reason a human can act on is reported
@@ -146,6 +152,7 @@ export const fromGitHub = (
     if (r.pull_request) continue;
     issues.push({
       number: Number(r.number),
+      title: typeof r.title === "string" ? r.title : "",
       ...(r.state === "open" || r.state === "closed" ? { state: r.state } : {}),
       body: typeof r.body === "string" ? r.body : null,
       labels: (r.labels ?? []).map((label: { name: string }) => label.name),

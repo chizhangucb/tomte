@@ -24,7 +24,7 @@
  * paginated listing and the single-issue re-read below, so the two cannot drift.
  */
 const DISPATCH_ISSUE_FIELDS =
-  "{number, state, body, pull_request: (.pull_request != null), labels: [.labels[]? | {name}], assignees: [.assignees[]? | {login}], issue_dependencies_summary: {blocked_by: (.issue_dependencies_summary.blocked_by // 0)}, sub_issues_summary: {total: (.sub_issues_summary.total // 0)}, author_association}";
+  "{number, title, state, body, pull_request: (.pull_request != null), labels: [.labels[]? | {name}], assignees: [.assignees[]? | {login}], issue_dependencies_summary: {blocked_by: (.issue_dependencies_summary.blocked_by // 0)}, sub_issues_summary: {total: (.sub_issues_summary.total // 0)}, author_association}";
 
 /** jq programs, one item per line: each keeps the fields its readers map, under the raw GitHub names. */
 export const PROJECTIONS = {

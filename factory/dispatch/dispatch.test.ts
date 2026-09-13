@@ -58,6 +58,7 @@ const config = (overrides: Partial<DispatchConfig> = {}): DispatchConfig => ({
 
 const ticket = (number: number, overrides: Partial<DispatchIssue> = {}): DispatchIssue => ({
   number,
+  title: "A leaf ticket",
   body: CRITERIA,
   labels: ["ready-for-agent"],
   assigned: false,
