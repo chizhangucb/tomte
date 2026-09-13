@@ -7,8 +7,8 @@
 #   Writes go through it so a label the factory adds fires its event.
 # - READ_TOKEN: the reading key, for the reads a fine-grained PAT cannot make (Actions runs, commit
 #   statuses). Backed by the automatic GITHUB_TOKEN; you store nothing for it.
-# The old names each replaces (GH_TOKEN for writes, STATUS_TOKEN and GITHUB_TOKEN for reads) are still
-# accepted, so a target pinned at an older factory_ref keeps working, until the contract ticket (#288).
+# The old names (GH_TOKEN for writes, STATUS_TOKEN and GITHUB_TOKEN for reads) were dropped by the
+# contract ticket (#288), so a target must hand in these two names.
 name: factory
 
 on:

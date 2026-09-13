@@ -122,7 +122,7 @@ jobs:
         # No npm install: the script is builtins only and runs on strip-types.
         env:
           GH_REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ secrets.FACTORY_PAT }}
+          FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
           TRUSTED_AUTHOR_ASSOCIATIONS: ${{ inputs.trusted_author_associations }}
           OUTPUT_DIR: ${{ runner.temp }}/factory-out
         run: node --experimental-strip-types factory/factory/dispatch/dispatch-run.ts
@@ -134,7 +134,7 @@ jobs:
         if: ${{ !cancelled() && github.event_name != 'issues' }}
         env:
           GH_REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ secrets.FACTORY_PAT }}
+          FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
           READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
           STUCK_MINUTES: ${{ inputs.stuck_minutes }}

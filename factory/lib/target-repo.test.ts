@@ -7,11 +7,13 @@ import * as path from "node:path";
 import { targetRepo } from "./target-repo.ts";
 
 /**
- * The key choice lives here and nowhere else (#281), and #282 is the expand step
- * of its rename: the module accepts the two settled names, `FACTORY_PAT` for
- * writes and `READ_TOKEN` for reads, while the old names it replaces keep
- * working. These tests prove which token reaches `gh` for a write and for a
- * read, wired first with only the new names and then with only the old ones.
+ * The key choice lives here and nowhere else (#281), and #288 is the contract
+ * step of its rename: the module reads the two settled names only, `FACTORY_PAT`
+ * for writes and `READ_TOKEN` for reads. The old names it replaced (`GH_TOKEN`
+ * for writes, `STATUS_TOKEN` and `GH_TOKEN` for reads) are gone: a script wired
+ * with only the old names is refused with a clear error naming the key it is
+ * missing, rather than handed an empty token. These tests prove which token
+ * reaches `gh` for a write and for a read, and that the old names no longer work.
  *
  * A stub `gh` on PATH echoes the token env it was handed, so the observed value
  * is the key the module chose. `factoryLogin` is the write path (its `gh api
@@ -72,7 +74,11 @@ const wireKeys = (keys: Partial<Record<(typeof KEY_VARS)[number], string>>): voi
   }
 };
 
-/** The module reads the env at construction, so wire the keys before building it. */
+/**
+ * The module reads the env when its factory is built (both keys resolved once at
+ * construction), so wire the keys before building it. A build with a missing key
+ * throws, so these observe the token by building and calling in one step.
+ */
 const writeKeyOf = (): string => targetRepo("owner/repo", "main").factoryLogin();
 const readKeyOf = (): string => targetRepo("owner/repo", "main").jobs(1)[0]?.name ?? "";
 
@@ -82,20 +88,26 @@ test("wired with only the new names, writes with FACTORY_PAT and reads with READ
   assert.equal(readKeyOf(), "read");
 });
 
-test("wired with only the old names, writes with GH_TOKEN and reads with STATUS_TOKEN", () => {
+test("the old names are refused: wired with only GH_TOKEN and STATUS_TOKEN, the missing writing key throws by name", () => {
   wireKeys({ GH_TOKEN: "gh-write", STATUS_TOKEN: "status-read" });
-  assert.equal(writeKeyOf(), "gh-write");
-  assert.equal(readKeyOf(), "status-read");
+  assert.throws(() => targetRepo("owner/repo", "main"), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /FACTORY_PAT/);
+    return true;
+  });
 });
 
-test("the new name wins over the old when both are set, so a target mid-migration is safe", () => {
+test("the old read names are refused: with the writing key set but only STATUS_TOKEN and GH_TOKEN for reads, the missing reading key throws by name", () => {
+  wireKeys({ FACTORY_PAT: "pat-write", STATUS_TOKEN: "status-read", GH_TOKEN: "gh-read" });
+  assert.throws(() => targetRepo("owner/repo", "main"), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /READ_TOKEN/);
+    return true;
+  });
+});
+
+test("the old names are inert when the new ones are set: FACTORY_PAT and READ_TOKEN win, GH_TOKEN and STATUS_TOKEN are ignored", () => {
   wireKeys({ FACTORY_PAT: "pat-write", GH_TOKEN: "gh-write", READ_TOKEN: "read", STATUS_TOKEN: "status-read" });
   assert.equal(writeKeyOf(), "pat-write");
   assert.equal(readKeyOf(), "read");
-});
-
-test("the reading key falls all the way back to GH_TOKEN when it is the only key set", () => {
-  wireKeys({ GH_TOKEN: "gh-only" });
-  assert.equal(writeKeyOf(), "gh-only");
-  assert.equal(readKeyOf(), "gh-only");
 });

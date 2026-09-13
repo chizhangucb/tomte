@@ -327,8 +327,8 @@ jobs:
         if: success()
         env:
           FACTORY_PAT: ${{ secrets.FACTORY_PAT }}
-          # Reading-key alias for the rename (#282): the handler's checks and Actions reads use it
-          # once retry is wired to the module (#284); the inherited GH_TOKEN is the old name, kept until #288.
+          # The module's reading key (#282, #288): the handler's labels and PR reads go through it.
+          # The checks wait's own reads still ride the job's inherited GH_TOKEN until #285 seams them.
           READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FAILURE_KIND: checks
           CHECKS_TIMEOUT_MINUTES: ${{ inputs.checks_timeout_minutes }}
