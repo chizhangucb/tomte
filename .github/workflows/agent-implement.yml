@@ -474,7 +474,7 @@ jobs:
           ARTIFACT_NAME: factory-implement-issue-${{ github.event.issue.number }}-run-${{ github.run_attempt }}
           IMPLEMENTER_OUTCOME: ${{ needs.implement.outputs.outcome }}
         run: |
-          if factory/node_modules/.bin/tsx factory/factory/retry/retry.ts; then
+          if factory/node_modules/.bin/tsx factory/factory/retry/retry-run.ts; then
             exit 0
           fi
           reason="(no reason file written; check workflow logs)"
