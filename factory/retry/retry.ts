@@ -7,9 +7,11 @@
  * how it is wired. docs/pipeline.md, "How a script is wired", carries the pattern.
  *
  * This file is the failed-attempt path: given a resolved target and a built
- * failure, decide with `decide.ts` and act. The reads that build the failure
- * for the checks path (the wait for the head's checks, its clock and its gh
- * reads) stay in the entry point, to be seamed with an injected clock in #285.
+ * failure, decide with `decide.ts` and act. It also holds the wait for a head's
+ * checks (`waitForChecks`, #285), which builds the checks-path failure the same
+ * way: its clock and its reads come through a `ChecksNeeds` record, so a test
+ * drives each outcome by advancing the injected clock rather than waiting. Only
+ * the log and artifact reads behind that wait stay in the entry point.
  *
  * The outcomes, each rehearsable against the record:
  * - retry: post the failing output as a marker comment on the ticket, add
@@ -40,6 +42,14 @@ import { errorMessage } from "../lib/errors.ts";
 import { linkedIssueNumber } from "../lib/linked-issue.ts";
 import { ESCALATION_LABEL, IMPLEMENT_LABEL, IN_PROGRESS_LABEL } from "../lib/labels.ts";
 import { type FactoryPrFacts } from "../lib/factory-pr.ts";
+import {
+  type CheckFailure,
+  type CheckState,
+  stillPendingReason,
+  summariseFailures,
+  unretryableReason,
+  waitOver,
+} from "./checks.ts";
 import { escalationLabels, type PrFix, prEscalation, prFix } from "./escalation.ts";
 import {
   type TellAuthorNote,
@@ -121,8 +131,8 @@ export interface Failure {
 /**
  * Everything the failed-attempt path needs from the target repo, never a raw
  * `gh` call. Every function throws on failure; the handler decides which throws
- * it shrugs off. #285 adds the checks wait's `now`/`sleep` here without a
- * redesign.
+ * it shrugs off. The wait for a head's checks names its own reads and clock in
+ * `ChecksNeeds` below, since `main` never uses them and the wait runs before it.
  */
 export interface RetryNeeds {
   /** A PR by number: its state, body and head branch, for resolving the target from a PR number. */
@@ -144,13 +154,82 @@ export interface RetryNeeds {
   readonly disarmAutoMerge: (number: string) => void;
 }
 
-/** What one failed attempt is acted on with. `now`/`sleep` join here in #285. */
+/** What one failed attempt is acted on with. */
 export interface RetryConfig {
   readonly branch: string;
   readonly runUrl: string;
   /** The workflow's FAILURE_KIND input, not the failure's own kind; only the checks path can lose its PR mid-wait. */
   readonly failureKind: "implement" | "checks";
 }
+
+/**
+ * The reads and the clock the wait for a head's checks needs (#285), injected so
+ * a test drives the clock instead of waiting on one, the way the heartbeat takes
+ * its `now`. A second record for the retry handler's second path: the
+ * failed-attempt path writes through `RetryNeeds`, and the wait that builds the
+ * checks failure reads through this before `main` ever runs. Every read throws
+ * as `RetryNeeds`'s do, and the wait shrugs none off: a read it cannot make ends
+ * the run rather than judging the head blind.
+ */
+export interface ChecksNeeds {
+  /** When the wait is running, injected rather than read here so a test advances it. */
+  readonly now: () => Date;
+  /** Wait one poll. Injected, never `setTimeout`, so a test's clock moves with no wall-clock time passing. */
+  readonly sleep: (ms: number) => Promise<void>;
+  /** The head's checks reduced to what the decision needs; the mapping (`evaluateChecks`) stays pure in `checks.ts`. */
+  readonly readChecks: (sha: string) => CheckState;
+  /** The open PR's mergeability and base; undefined once it is no longer open (it closed or merged mid-wait). */
+  readonly prMergeability: (pr: OpenPr) => PrMergeability | undefined;
+  /** The failing checks' output, joined; the log and artifact reads behind it stay in the entry point. */
+  readonly failuresOutput: (failures: readonly CheckFailure[]) => Promise<string>;
+}
+
+/** The head and the clock bounds of one wait, read from the env by the entry point. */
+export interface ChecksWait {
+  readonly sha: string;
+  readonly timeoutMs: number;
+  readonly pollMs: number;
+}
+
+/**
+ * Wait for the head's checks to settle, or for GitHub to report the open PR
+ * conflicting (#145), then the failure among them, or undefined when the head is
+ * green. `waitOver` is the rule for whether one observation ends the wait and
+ * `stillPendingReason` the verdict on a stopped one; this is the loop that polls
+ * them. Its clock and its reads are the caller's, through `ChecksNeeds`, so a
+ * test drives each outcome by advancing the injected clock (#285). Behaviour is
+ * the pre-seam entry point's; only the clock and the reads moved behind the record.
+ */
+export const waitForChecks = async (
+  needs: ChecksNeeds,
+  wait: ChecksWait,
+  pr: OpenPr | undefined,
+): Promise<Failure | undefined> => {
+  const deadline = needs.now().getTime() + wait.timeoutMs;
+  const observe = () => {
+    const state = needs.readChecks(wait.sha);
+    const mergeability = pr && state.pending.length > 0 ? needs.prMergeability(pr) : undefined;
+    return { state, mergeability };
+  };
+  let seen = observe();
+  while (!waitOver(seen.state, seen.mergeability?.mergeable) && needs.now().getTime() < deadline) {
+    console.log(`Waiting for ${seen.state.pending.join(", ")} on ${wait.sha.slice(0, 7)}.`);
+    await needs.sleep(wait.pollMs);
+    seen = observe();
+  }
+  const { state, mergeability } = seen;
+  const stillPending = stillPendingReason(state, mergeability?.mergeable, wait.timeoutMs / 60_000);
+  if (stillPending) return { kind: "ci", summary: stillPending, output: "", requeue: stillPending, mergeability };
+  const { failures } = state;
+  if (failures.length === 0) return undefined;
+  const first = failures[0] as CheckFailure;
+  return {
+    kind: first.kind,
+    summary: summariseFailures(failures),
+    output: await needs.failuresOutput(failures),
+    unretryable: unretryableReason(failures),
+  };
+};
 
 /** A write whose failure is logged and shrugged off, the handler's own soft-fail policy (#83, #148). */
 const soft = (write: () => void): void => {
