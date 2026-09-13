@@ -42,6 +42,7 @@ import { errorMessage } from "../lib/errors.ts";
 import { linkedIssueNumber } from "../lib/linked-issue.ts";
 import { ESCALATION_LABEL, IMPLEMENT_LABEL, IN_PROGRESS_LABEL } from "../lib/labels.ts";
 import { type FactoryPrFacts } from "../lib/factory-pr.ts";
+import { type PrDisposition, prDisposition } from "../lib/pr-disposition.ts";
 import {
   type CheckFailure,
   type CheckState,
@@ -50,7 +51,7 @@ import {
   unretryableReason,
   waitOver,
 } from "./checks.ts";
-import { escalationLabels, type PrFix, prEscalation, prFix } from "./escalation.ts";
+import { escalationLabels, prEscalation } from "./escalation.ts";
 import {
   type TellAuthorNote,
   authorConflictReason,
@@ -291,11 +292,16 @@ const resolveTarget = (needs: RetryNeeds): Target | Unresolved => {
   });
 };
 
-/** Hand-off or tell-author on the open PR (#183), from the facts the read that found it came back with. */
-const prFixOf = (pr: OpenPr): PrFix => prFix(pr.facts);
+/**
+ * The **PR fix** on the open PR (#183, #309): hand-off or tell-author, the
+ * label that records it, and the sentence naming what it does, from
+ * `prDisposition`. `base` is the branch a conflict hand-off merges in; the
+ * failing-check path has none to give and does not name it, so it asks without one.
+ */
+const prFixOf = (pr: OpenPr, base?: string): PrDisposition => prDisposition(pr.facts, base);
 
-/** The label `prFix` decided, on the PR. On a hand-off it starts the next run; on a tell-author it makes the decline stick. */
-const labelPr = (needs: RetryNeeds, pr: OpenPr, fix: PrFix): void => {
+/** The label the PR fix decided, on the PR. On a hand-off it starts the next run; on a tell-author it makes the decline stick. */
+const labelPr = (needs: RetryNeeds, pr: OpenPr, fix: PrDisposition): void => {
   needs.addLabel({ kind: "pr", number: pr.number }, fix.add);
 };
 
@@ -316,9 +322,9 @@ const keepInProgress = (needs: RetryNeeds, pr: string, reason: string): void => 
  * this thread already carries the record; when there is one it goes last, since
  * by then the label is on.
  */
-const tellAuthor = (needs: RetryNeeds, config: RetryConfig, pr: OpenPr, fix: PrFix, note: TellAuthorNote | undefined): void => {
+const tellAuthor = (needs: RetryNeeds, config: RetryConfig, pr: OpenPr, fix: PrDisposition, note: TellAuthorNote | undefined): void => {
   labelPr(needs, pr, fix);
-  if (note) needs.comment({ kind: "pr", number: pr.number }, renderTellAuthorComment({ ...note, runUrl: config.runUrl }));
+  if (note) needs.comment({ kind: "pr", number: pr.number }, renderTellAuthorComment({ ...note, sentence: fix.sentence, runUrl: config.runUrl }));
   console.log(`PR #${pr.number} is its author's to fix: no ${IMPLEMENT_LABEL}, ${fix.add} on.`);
 };
 
@@ -413,12 +419,12 @@ const standDown = (
  * tell-author otherwise (#183). No retry is spent either way.
  */
 const handOff = (needs: RetryNeeds, config: RetryConfig, { pr, base }: PrMergeability, reason: string): void => {
-  const fix = prFixOf(pr);
+  const fix = prFixOf(pr, base);
   if (fix.action === "tell-author") {
     tellAuthor(needs, config, pr, fix, { reason: authorConflictReason(base), issueNumber: undefined, output: "" });
     return;
   }
-  needs.comment({ kind: "pr", number: pr.number }, renderHandOffComment({ reason, base, runUrl: config.runUrl }));
+  needs.comment({ kind: "pr", number: pr.number }, renderHandOffComment({ reason, add: fix.add, sentence: fix.sentence, runUrl: config.runUrl }));
   labelPr(needs, pr, fix);
   console.log(`Handed off PR #${pr.number} without spending a retry: ${reason}; ${fix.add} on.`);
 };

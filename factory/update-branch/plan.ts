@@ -14,15 +14,16 @@
  * (`updateRefusal`). The script spawns and writes; it decides nothing, so
  * nothing it decides goes untested.
  *
- * The two imports are `lib/labels.ts` and `lib/factory-pr.ts`, which import
- * nothing themselves and are both in this job's cone. Nothing else may be
- * imported: `GhFailure` below is written structurally rather than importing
- * `lib/gh.ts`, so this stays the pure decision half. Imports use explicit
- * `.ts` so the job can run on bare `node --experimental-strip-types` without
- * installing the engine.
+ * The imports are `lib/labels.ts`, `lib/factory-pr.ts` and
+ * `lib/pr-disposition.ts`, each builtins-only or importing only the first two,
+ * and all in this job's cone. Nothing else may be imported: `GhFailure` below
+ * is written structurally rather than importing `lib/gh.ts`, so this stays the
+ * pure decision half. Imports use explicit `.ts` so the job can run on bare
+ * `node --experimental-strip-types` without installing the engine.
  */
-import { type FactoryPrFacts, isFactoryAuthoredPr } from "../lib/factory-pr.ts";
+import type { FactoryPrFacts } from "../lib/factory-pr.ts";
 import { HANDED_OFF_LABELS } from "../lib/labels.ts";
+import { prDisposition } from "../lib/pr-disposition.ts";
 
 /** A commit status context, not a label: the reviewer's verdict on a head. */
 export const VERDICT_CONTEXT = "factory/verdict";
@@ -211,13 +212,14 @@ export type ConflictSubject = FactoryPrFacts & {
  * Why the third (#180, ADR 0007). implement-pr checks
  * the branch out, merges the base, resolves and force-pushes. On a PR the
  * factory opened that is the whole point; on a PR a person or an outside agent
- * wrote it is an agent rewriting someone else's branch. The amendment draws
- * the line at who opened the PR, not at whether the factory has ever touched
- * it, so this asks `isFactoryAuthoredPr` and not `isFactoryPr`: the broad
- * one's verdict arm is exactly the PR that must not be handed off. It is not a
- * label either, so nothing a human adds to or removes from a PR moves the
- * answer. One definition, `factory/lib/factory-pr.ts`, shared with escalation
- * (#174), which had to draw the same line.
+ * wrote it is an agent rewriting someone else's branch. The hand-off vs
+ * tell-author choice is `prDisposition`'s (#309), read from there rather than
+ * derived here, so update-branch's answer and the retry handler's on the same
+ * conflict cannot drift. It keys on who opened the PR, not on whether the
+ * factory has ever touched it (`isFactoryAuthoredPr`, not `isFactoryPr`: the
+ * broad one's verdict arm is exactly the PR that must not be handed off), and
+ * on the branch and body, not a label, so nothing a human adds to or removes
+ * from a PR moves it.
  *
  * `agent:blocked` and not a bare comment, because the decline has to stick.
  * update-branch runs on every push to main and the conflict is still there on
@@ -253,14 +255,15 @@ export type ConflictSubject = FactoryPrFacts & {
 export const planConflict = (pr: ConflictSubject): ConflictPlan => {
   const held = pr.labels.find((l) => HANDED_OFF_LABELS.includes(l));
   if (held) return { number: pr.number, action: "skip", reason: `conflicts with main, already ${held}` };
-  if (!isFactoryAuthoredPr(pr)) {
-    return {
-      number: pr.number,
-      action: "tell-author",
-      reason: "conflicts with main; the factory did not author this PR, so the conflict is its author's to resolve",
-    };
-  }
-  return { number: pr.number, action: "hand-off", reason: "conflicts with main; handing the PR to the implementer" };
+  const { action } = prDisposition(pr);
+  return {
+    number: pr.number,
+    action,
+    reason:
+      action === "tell-author"
+        ? "conflicts with main; the factory did not author this PR, so the conflict is its author's to resolve"
+        : "conflicts with main; handing the PR to the implementer",
+  };
 };
 
 export const planUpdate = (pr: OpenPr): Plan => {

@@ -1,13 +1,17 @@
 /**
- * The factory asks `isFactoryAuthoredPr` before it closes a pull request or
- * puts the implementer on its branch (ADR 0007, #195).
- * The tree is the fixture, as in `lib/strip-types-cone.test.ts`: a table of
- * the sites that decide those writes and the modules that make them. The last
- * two tests hand the scan synthetic sources instead, to check the scan itself.
+ * The factory asks `isFactoryAuthoredPr` before it closes a pull request
+ * (ADR 0007, #195). Putting the implementer on a branch turns on the same
+ * question, but that is the one **PR fix** decision now (`pr-disposition.ts`,
+ * #309), asked once there and tested there, so the sites that used to ask it
+ * each read the answer instead; this scan need only guard the close.
  *
- * It asserts the asking, never a shared answer. Escalation answers a PR the
- * factory did not author with `needs-human`, the other two sites with a
- * tell-author, so each answer is compared only with the same site's others.
+ * The tree is the fixture, as in `lib/strip-types-cone.test.ts`: a table of
+ * the sites that decide the close and the modules that make it. The last two
+ * tests hand the scan synthetic sources instead, to check the scan itself.
+ *
+ * It asserts the asking, never a shared answer: escalation answers a PR the
+ * factory did not author with `needs-human`, so the answer is compared only
+ * with the site's own others.
  *
  * The limit, and it is not to be trusted past it: it pins the sites that
  * exist. It checks that each tabled site asks, and that the module making the
@@ -30,8 +34,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { test } from "node:test";
 
-import { prEscalation, prFix } from "../retry/escalation.ts";
-import { planConflict } from "../update-branch/plan.ts";
+import { prEscalation } from "../retry/escalation.ts";
 import {
   FACTORY_BODY_MARKER,
   type FactoryPrFacts,
@@ -42,15 +45,24 @@ import {
 
 const repoRoot = new URL("../../", import.meta.url);
 
-/** Where the predicate is defined. It calls itself through `isFactoryPr`, which is not a site. */
+/**
+ * The modules excluded from the "who asks the predicate" scan below, because
+ * they are where the answer is *defined* rather than a site that writes on it.
+ * `factory-pr.ts` holds the predicate (it calls itself through `isFactoryPr`,
+ * not a site). `pr-disposition.ts` is the one **PR fix** decision (#309): it
+ * asks the predicate once and returns the label, and its own tests cover both
+ * branches, so update-branch's conflict plan and the retry handler read the
+ * choice from it instead of each asking. The label the callers then write is
+ * the module's typed return, not a mapping they keep.
+ */
 const PREDICATE_MODULE = "factory/lib/factory-pr.ts";
+const DECISION_MODULES = [PREDICATE_MODULE, "factory/lib/pr-disposition.ts"];
 
 /**
- * Every site that decides whether a PR is closed or gets the implementer, the
- * module that makes that write, and the site's decision called with everything
- * it reads besides who authored the PR held fixed. `planConflict` is given no
- * `HANDED_OFF_LABELS` label, since a PR carrying one is skipped before the
- * question is asked.
+ * Every site that decides whether a PR is *closed*, the module that makes that
+ * write, and the site's decision called with everything it reads besides who
+ * authored the PR held fixed. Whether a PR gets the implementer is no longer a
+ * per-site decision: it is `pr-disposition.ts`'s, above, tested there.
  */
 const WRITE_SITES: readonly {
   module: string;
@@ -65,20 +77,6 @@ const WRITE_SITES: readonly {
     writer: "factory/retry/retry.ts",
     writes: "closes the PR",
     decide: (pr) => prEscalation({ ...pr, labels: ["agent:review"] }),
-  },
-  {
-    module: "factory/retry/escalation.ts",
-    site: "prFix",
-    writer: "factory/retry/retry.ts",
-    writes: "puts the implementer on the branch",
-    decide: (pr) => prFix(pr),
-  },
-  {
-    module: "factory/update-branch/plan.ts",
-    site: "planConflict",
-    writer: "factory/update-branch/update-branch.ts",
-    writes: "puts the implementer on the branch",
-    decide: (pr) => planConflict({ ...pr, number: 7, labels: [] }),
   },
 ];
 
@@ -142,7 +140,7 @@ const siteOf = (statementStart: string): string =>
 const treeCodes = (): Record<string, string> =>
   Object.fromEntries(
     factoryModules()
-      .filter((module) => module !== PREDICATE_MODULE)
+      .filter((module) => !DECISION_MODULES.includes(module))
       .map((module) => [module, codeOf(module)]),
   );
 

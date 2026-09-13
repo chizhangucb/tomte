@@ -4,7 +4,8 @@ import { test } from "node:test";
 
 import { RATE_LIMITED_FILE } from "../lib/accounts";
 import { whySkipped } from "../dispatch/select.ts";
-import { BLOCKED_LABEL, IN_PROGRESS_LABEL } from "../lib/labels";
+import { BLOCKED_LABEL, IMPLEMENT_LABEL, IN_PROGRESS_LABEL } from "../lib/labels";
+import { prDisposition } from "../lib/pr-disposition.ts";
 import { trustPolicy } from "../lib/trusted-authors.ts";
 import {
   CONFLICT_REASON,
@@ -365,8 +366,12 @@ test("the review workflow leaves agent:in-progress on a requeued PR for the reco
   );
 });
 
+/** The label-bound sentence `prDisposition` hands each caller, from a factory branch or someone else's. */
+const handOffSentence = prDisposition({ headRef: "agent/issue-7-thing", body: "" }, "main").sentence;
+const tellAuthorSentence = prDisposition({ headRef: "maintainer/flaky-login", body: "Fixes it." }).sentence;
+
 test("the hand-off comment names the conflict, the implementer's label, and that no retry was spent", () => {
-  const body = renderHandOffComment({ reason: CONFLICT_REASON, base: "main", runUrl: "u" });
+  const body = renderHandOffComment({ reason: CONFLICT_REASON, add: IMPLEMENT_LABEL, sentence: handOffSentence, runUrl: "u" });
   assert.match(body, /conflicts with its base/);
   assert.match(body, /`main`/);
   assert.match(body, /`agent:implement`/);
@@ -381,6 +386,7 @@ test("the comment on a PR the factory did not author says what failed and that t
   // comment, so what failed has to be on their own thread, with it.
   const body = renderTellAuthorComment({
     reason: "verdict: 2 of 5 acceptance criteria unticked",
+    sentence: tellAuthorSentence,
     runUrl: "u",
     issueNumber: "42",
     output: "## Verdict: fail\n\n- [ ] the helper exists",
@@ -407,7 +413,7 @@ test("an author whose next failure is terminal is told so on their own thread", 
   // which this author has no reason to read: the escalation that follows puts
   // `needs-human` on their PR and disarms its auto-merge, so being told after
   // the fact is being told too late.
-  const note = { reason: "verdict: failed", runUrl: "u", issueNumber: "42", output: "" };
+  const note = { reason: "verdict: failed", sentence: tellAuthorSentence, runUrl: "u", issueNumber: "42", output: "" };
   const last = renderTellAuthorComment({ ...note, escalatesNext: true });
   assert.match(last, /last attempt/);
   assert.match(last, /`needs-human`/);
@@ -419,7 +425,7 @@ test("an author whose next failure is terminal is told so on their own thread", 
 test("the author's comment leaves out an output nothing gave it", () => {
   // The conflict hand-off has a reason and no failing output, there being no
   // check that failed; an empty <details> would promise one.
-  const body = renderTellAuthorComment({ reason: "verdict: failed", runUrl: "u", issueNumber: undefined, output: "" });
+  const body = renderTellAuthorComment({ reason: "verdict: failed", sentence: tellAuthorSentence, runUrl: "u", issueNumber: undefined, output: "" });
   assert.doesNotMatch(body, /<details>/);
   assert.doesNotMatch(body, /#undefined/);
 });

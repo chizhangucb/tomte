@@ -19,7 +19,7 @@ import type { FactoryPrFacts } from "../lib/factory-pr.ts";
 import { BLOCKED_LABEL, ESCALATION_LABEL, HOLD_LABELS, IMPLEMENT_LABEL, IN_PROGRESS_LABEL, READY_LABEL } from "../lib/labels.ts";
 import { linkedIssueNumber } from "../lib/linked-issue";
 import { boundOutput } from "../lib/verdict";
-import type { PrFixAction } from "./escalation.ts";
+import type { PrFixAction } from "../lib/pr-disposition.ts";
 
 export type FailureKind = "implement" | "merge-gate" | "ci" | "verdict";
 
@@ -479,7 +479,9 @@ export const renderStandDownComment = (input: {
  */
 export const renderHandOffComment = (input: {
   readonly reason: string;
-  readonly base: string;
+  /** The label and the sentence naming what it does, from `prDisposition` (#309). */
+  readonly add: typeof IMPLEMENT_LABEL;
+  readonly sentence: string;
   readonly runUrl: string;
 }): string =>
   [
@@ -487,7 +489,7 @@ export const renderHandOffComment = (input: {
     "",
     `${input.reason}. No retry was spent. Run: ${input.runUrl}`,
     "",
-    `Labeled \`${IMPLEMENT_LABEL}\`. Its run merges \`${input.base}\` into the branch, resolves the conflicts, and pushes; the merge gate and the review then judge the new head and auto-merge lands it.`,
+    `Labeled \`${input.add}\`. ${input.sentence} The merge gate and the review then judge the new head and auto-merge lands it.`,
   ].join("\n");
 
 /**
@@ -532,7 +534,7 @@ export interface TellAuthorNote {
  * comment says, and telling a producer how to enter the **Judged path** is
  * #181's job rather than a failure comment's.
  */
-export const renderTellAuthorComment = (input: TellAuthorNote & { readonly runUrl: string }): string =>
+export const renderTellAuthorComment = (input: TellAuthorNote & { readonly sentence: string; readonly runUrl: string }): string =>
   [
     "### The fix is yours: the factory did not author this PR",
     "",
@@ -540,7 +542,7 @@ export const renderTellAuthorComment = (input: TellAuthorNote & { readonly runUr
     "",
     `The factory puts an implementer only on a branch it opened, so no agent of the factory's will rewrite this one. It carries \`${BLOCKED_LABEL}\` instead, this factory's "a human must look", which is what holds the next review and the reconciler back.`,
     "",
-    `Push the fix yourself, then take \`${BLOCKED_LABEL}\` off, which hands the PR back. Bringing the branch up to date with its base is the one part that never stops, since it never asks who opened a PR; auto-merge, if it is armed, is untouched throughout.`,
+    `${input.sentence} Bringing the branch up to date with its base is the one part that never stops, since it never asks who opened a PR; auto-merge, if it is armed, is untouched throughout.`,
     ...(input.issueNumber ? ["", `The attempt is recorded on #${input.issueNumber}.`] : []),
     ...(input.escalatesNext
       ? [

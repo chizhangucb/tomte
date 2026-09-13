@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { VERDICT_SECTION_START } from "../lib/factory-pr.ts";
-import { escalationLabels, prEscalation, prFix } from "./escalation.ts";
+import { escalationLabels, prEscalation } from "./escalation.ts";
 
 const agentBranch = { headRef: "agent/issue-7-thing", body: "" };
 const notAuthored = { headRef: "maintainer/flaky-login", body: "Fixes the flaky login test." };
@@ -69,27 +69,4 @@ test("a PR left open is parked, not just stripped: removals alone are repaired b
   assert.equal(prEscalation({ ...notAuthored, labels: ["agent:review"] }).add, "needs-human");
   // A closed PR is in no listing the reconciler reads, so it needs no parking label.
   assert.equal(prEscalation({ ...agentBranch, labels: ["agent:review"] }).add, undefined);
-});
-
-test("the factory puts an implementer only on a branch it authored", () => {
-  // #183: the retry labelled whatever PR was open `agent:implement`, which is
-  // what starts implement-pr on the branch. On a PR the factory authored that
-  // is the point; on anyone else's it is an agent pushing to their branch.
-  assert.deepEqual(prFix(agentBranch), { action: "hand-off", add: "agent:implement" });
-});
-
-test("a failure on a PR the factory did not author is its author's to fix", () => {
-  // The same answer `planConflict` gives the same PR (#180), down to the
-  // label: `agent:blocked` is in PARKED_LABELS so nothing re-arms the PR, and
-  // in HANDED_OFF_LABELS so update-branch stops telling its author on every
-  // push to main. A second vocabulary here would be a second thing to clear.
-  assert.deepEqual(prFix(notAuthored), { action: "tell-author", add: "agent:blocked" });
-});
-
-test("a PR the reviewer judged is still not the factory's to write to", () => {
-  // The arm authorship drops: the factory wrote the verdict section, not the branch.
-  const judged = { headRef: "maintainer/flaky-login", body: `body\n\n${VERDICT_SECTION_START}\n## Verdict: fail` };
-  assert.equal(prFix(judged).action, "tell-author");
-  // And an outside agent's PR is no more the factory's to write to than a person's.
-  assert.equal(prFix({ headRef: "bot/dependabot-bump", body: "" }).action, "tell-author");
 });
