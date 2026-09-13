@@ -53,6 +53,7 @@ import { required } from "../../lib/env";
 import { fail, writeJson, writeText } from "../../lib/run-output";
 import { resolveRoleModel } from "../../lib/model";
 import { describeDropped, fetchPullRequestContext } from "../shared/review-context";
+import { prContextRepo } from "../../lib/pr-context-repo";
 import { trustPolicyFromEnv } from "../../lib/trusted-authors";
 import {
   filterInlineComments,
@@ -64,6 +65,8 @@ import { retrySectionForRun } from "../../retry/context";
 import { conflictSection, parseMergeTreeConflicts } from "../../lib/conflicts";
 
 const PR_NUMBER = required("PR_NUMBER");
+/** The target as `owner/repo`, the address the PR-context reads are made against. */
+const GH_REPO = required("GH_REPO");
 const BRANCH = required("BRANCH");
 const IMPLEMENTER_MODEL = required("IMPLEMENTER_MODEL");
 /** The base branch, present as a local branch (the workflow runs `git branch -f main origin/main`). */
@@ -101,7 +104,7 @@ await runAgentWorkflow(
     // target's own policy rather than a default of their own.
     const policy = trustPolicyFromEnv();
     console.log(`Trusted authors: ${policy.associations.join(", ")}.`);
-    const context = fetchPullRequestContext(PR_NUMBER, policy);
+    const context = fetchPullRequestContext(prContextRepo(GH_REPO), PR_NUMBER, policy);
     console.log(describeDropped(context.dropped));
 
     // #10's rule is a label on the ticket, so the labels come off the linked
