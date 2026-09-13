@@ -1,6 +1,14 @@
 # Copy to .github/workflows/factory.yml in the target repo. This is the only factory file a target carries.
 # factory_ref must equal the ref in each `uses:` (the scripts are checked out at factory_ref; GitHub does
 # not tell a cross-repo reusable workflow which ref it came from). Change both together.
+#
+# Two keys, two settled names, handed in by `secrets: inherit`:
+# - FACTORY_PAT: the writing key. The PAT you store as the FACTORY_PAT secret (README's onboarding step).
+#   Writes go through it so a label the factory adds fires its event.
+# - READ_TOKEN: the reading key, for the reads a fine-grained PAT cannot make (Actions runs, commit
+#   statuses). Backed by the automatic GITHUB_TOKEN; you store nothing for it.
+# The old names each replaces (GH_TOKEN for writes, STATUS_TOKEN and GITHUB_TOKEN for reads) are still
+# accepted, so a target pinned at an older factory_ref keeps working, until the contract ticket (#288).
 name: factory
 
 on:

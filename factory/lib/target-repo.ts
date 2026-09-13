@@ -3,11 +3,13 @@
  * make against a target, written once here and handed to a script as its needs
  * record. docs/pipeline.md, "How a script is wired", carries the pattern.
  *
- * The key choice lives here, not in any script: reads a fine-grained PAT cannot
- * make (Actions runs and jobs, commit statuses) use `READ_TOKEN`, falling back
- * to `GH_TOKEN`; everything else, every write among them, uses `GH_TOKEN` so its
- * events fire. Those two env names and that fallback are #281's to keep and
- * #282's to rename; no function here takes a key.
+ * The key choice lives here, not in any script. Two settled names (#282): the
+ * writing key is `FACTORY_PAT`, so its events fire, and the reading key, for the
+ * reads a fine-grained PAT cannot make (Actions runs and jobs, commit statuses),
+ * is `READ_TOKEN`. Both accept the old name they replace until the contract
+ * ticket (#288) drops it: the writing key falls back to `GH_TOKEN`, the reading
+ * key to `STATUS_TOKEN` (update-branch's) and then to `GH_TOKEN`. No function
+ * here takes a key; both are resolved once, below.
  *
  * Every function throws `GhError` on failure, the shape `lib/gh.ts` throws, a
  * read that answered with something other than JSON included. Which of those a
@@ -51,16 +53,19 @@ import { GhError, gh } from "./gh.ts";
  * same set.
  */
 export const targetRepo = (repo: string, base: string): Needs => {
-  // The reading key overrides the writing one for the reads a fine-grained PAT
-  // cannot make. Read once here so no function names a key (#281).
-  const readEnv = { ...process.env, GH_TOKEN: process.env.READ_TOKEN || process.env.GH_TOKEN };
+  // The two keys, resolved once so no function names one (#281, #282). `gh`
+  // reads the token from `GH_TOKEN`, so each env sets that slot to the chosen
+  // key: the writing key prefers the new `FACTORY_PAT`, the reading key the new
+  // `READ_TOKEN`, each falling back through the old names it replaces.
+  const writeEnv = { ...process.env, GH_TOKEN: process.env.FACTORY_PAT || process.env.GH_TOKEN };
+  const readEnv = { ...process.env, GH_TOKEN: process.env.READ_TOKEN || process.env.STATUS_TOKEN || process.env.GH_TOKEN };
 
   /**
    * A read whose command answered with something other than JSON is a failure of
    * that command, thrown in the shape `gh` throws (`GhError`): the command and
    * the cause, no stack, no token.
    */
-  const ghJson = (args: string[], env?: NodeJS.ProcessEnv): any => {
+  const ghJson = (args: string[], env: NodeJS.ProcessEnv = writeEnv): any => {
     const out = gh(args, env);
     try {
       return JSON.parse(out);
@@ -70,7 +75,7 @@ export const targetRepo = (repo: string, base: string): Needs => {
   };
 
   /** All pages of `endpoint`, each projected by gh to the fields the reconciler maps, one item per line. */
-  const paginate = (endpoint: string, projection: Projection, env?: NodeJS.ProcessEnv): any[] => {
+  const paginate = (endpoint: string, projection: Projection, env: NodeJS.ProcessEnv = writeEnv): any[] => {
     const args = ["api", "--paginate", endpoint, "--jq", PROJECTIONS[projection]];
     try {
       return parseItems(gh(args, env));
@@ -124,9 +129,9 @@ export const targetRepo = (repo: string, base: string): Needs => {
     return state === "pending" || state === "success" || state === "failure" || state === "error" ? state : "none";
   };
 
-  const commitDate = (sha: string): string => gh(["api", `repos/${repo}/commits/${sha}`, "--jq", ".commit.committer.date"]).trim();
+  const commitDate = (sha: string): string => gh(["api", `repos/${repo}/commits/${sha}`, "--jq", ".commit.committer.date"], writeEnv).trim();
 
-  const behindBy = (sha: string): number => Number(gh(["api", `repos/${repo}/compare/${base}...${sha}`, "--jq", ".behind_by"]).trim());
+  const behindBy = (sha: string): number => Number(gh(["api", `repos/${repo}/compare/${base}...${sha}`, "--jq", ".behind_by"], writeEnv).trim());
 
   /**
    * Whoever opened a ticket, via REST because `gh issue view --json` carries no
@@ -140,14 +145,14 @@ export const targetRepo = (repo: string, base: string): Needs => {
 
   const prComments = (pr: number): PrComment[] => paginate(`repos/${repo}/issues/${pr}/comments?per_page=100`, "comments").map(commentFromGitHub);
 
-  const factoryLogin = (): string => gh(["api", "user", "--jq", ".login"]).trim();
+  const factoryLogin = (): string => gh(["api", "user", "--jq", ".login"], writeEnv).trim();
 
   const currentLabels = (subject: number): string[] =>
     ghJson(["issue", "view", String(subject), "--repo", repo, "--json", "labels", "--jq", "[.labels[].name]"]);
 
   /** A subject's kind is gh's own noun for it, so it is the subcommand: `gh issue edit`, `gh pr edit`. */
   const edit = (subject: Subject, args: string[]): void => {
-    gh([subject.kind, "edit", String(subject.number), "--repo", repo, ...args]);
+    gh([subject.kind, "edit", String(subject.number), "--repo", repo, ...args], writeEnv);
   };
 
   return {
@@ -164,10 +169,10 @@ export const targetRepo = (repo: string, base: string): Needs => {
     currentLabels,
     addLabel: (subject, label) => edit(subject, ["--add-label", label]),
     removeLabel: (subject, label) => edit(subject, ["--remove-label", label]),
-    comment: (subject, body) => gh([subject.kind, "comment", String(subject.number), "--repo", repo, "--body", body]),
+    comment: (subject, body) => gh([subject.kind, "comment", String(subject.number), "--repo", repo, "--body", body], writeEnv),
     dispatch: (eventType, pr) =>
-      gh(["api", "--method", "POST", `repos/${repo}/dispatches`, "-f", `event_type=${eventType}`, "-F", `client_payload[pr]=${pr}`, "--silent"]),
+      gh(["api", "--method", "POST", `repos/${repo}/dispatches`, "-f", `event_type=${eventType}`, "-F", `client_payload[pr]=${pr}`, "--silent"], writeEnv),
     // The same call the implement workflow's non-fatal step makes, and idempotent.
-    armAutoMerge: (pr) => gh(["pr", "merge", String(pr), "--repo", repo, "--auto", "--squash"]),
+    armAutoMerge: (pr) => gh(["pr", "merge", String(pr), "--repo", repo, "--auto", "--squash"], writeEnv),
   };
 };
