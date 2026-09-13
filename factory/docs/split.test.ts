@@ -99,5 +99,5 @@ test("dispatcher.md names both spec signals: the Spec: title and sub-issues (#29
   // or a reader learns only half the rule.
   const dispatcher = read("docs/factory/dispatcher.md");
   assert.match(dispatcher, /`Spec:`/, "dispatcher.md does not name the Spec: title signal");
-  assert.match(dispatcher, /sub-issues/, "dispatcher.md does not name the sub-issue signal");
+  assert.match(dispatcher, /sub-issues of its own/, "dispatcher.md does not name the sub-issue signal");
 });
