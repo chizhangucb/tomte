@@ -33,7 +33,7 @@ const inMemory = (overrides: Partial<RunNeeds> = {}): RunNeeds => ({
   ...overrides,
 });
 
-const facts = (overrides: Partial<RunConfig> = {}): RunConfig => ({
+const config = (overrides: Partial<RunConfig> = {}): RunConfig => ({
   own: { workflowName: "Implement", runId: "900" },
   now: () => new Date("2026-09-13T00:00:00Z"),
   sleep: async () => {},
@@ -52,7 +52,7 @@ test("an implementer's failure carries its reason, its summary line and the tail
     failureReason: () => "the tests never went green\nand the branch was left dirty\n",
     newestRunLog: () => ({ name: "claude-2.log", text: "line one\nline two\nline three" }),
   });
-  const failure = assembleRun(reads, facts()).implementFailure("failure");
+  const failure = assembleRun(reads, config()).implementFailure("failure");
   assert.equal(failure.kind, "implement");
   assert.equal(failure.summary, "implement: the tests never went green");
   assert.match(failure.output, /^Reason: the tests never went green\nand the branch was left dirty$/m);
@@ -62,7 +62,7 @@ test("an implementer's failure carries its reason, its summary line and the tail
 
 test("an attempt that wrote no reason is described by how it ended, and a rate-limited one requeues", () => {
   const reads = inMemory({ rateLimited: () => true });
-  const failure = assembleRun(reads, facts()).implementFailure("cancelled");
+  const failure = assembleRun(reads, config()).implementFailure("cancelled");
   assert.match(failure.summary, /^implement: the run was killed before it could report a reason/);
   assert.equal(failure.requeue, RATE_LIMITED_REASON, "every account rate limited is not the ticket's failure");
   assert.doesNotMatch(failure.output, /Log tail/, "a run with no log gets no log tail section");
@@ -90,7 +90,7 @@ test("a head's checks are judged with each check run's workflow read, and this r
       return runId === "900" ? "Implement" : "Target CI";
     },
   });
-  const state = assembleRun(reads, facts()).checksNeeds().readChecks("abc1234");
+  const state = assembleRun(reads, config()).checksNeeds().readChecks("abc1234");
   // The failing check runs of the target's own CI, and not this run's own job.
   assert.deepEqual(state.failures.map((f) => f.name), ["build", "lint"]);
   assert.deepEqual(state.pending, []);
@@ -112,7 +112,7 @@ test("a workflow name that cannot be read is logged, and the head is still judge
   const log = capturingLog();
   let state;
   try {
-    state = assembleRun(reads, facts()).checksNeeds().readChecks("abc1234");
+    state = assembleRun(reads, config()).checksNeeds().readChecks("abc1234");
   } finally {
     log.restore();
   }
@@ -123,11 +123,11 @@ test("a workflow name that cannot be read is logged, and the head is still judge
 
 test("the open PR's mergeability is read as GitHub reports it, and a PR that closed mid-wait has none", () => {
   const pr = { number: "12", facts: { headRef: "agent/issue-7-x", body: "" } };
-  const open = assembleRun(inMemory({ prView: () => ({ state: "OPEN", mergeable: "CONFLICTING", baseRefName: "release" }) }), facts())
+  const open = assembleRun(inMemory({ prView: () => ({ state: "OPEN", mergeable: "CONFLICTING", baseRefName: "release" }) }), config())
     .checksNeeds()
     .prMergeability(pr);
   assert.deepEqual(open, { pr, mergeable: "CONFLICTING", base: "release" });
-  const gone = assembleRun(inMemory({ prView: () => ({ state: "MERGED", mergeable: "MERGEABLE", baseRefName: "main" }) }), facts())
+  const gone = assembleRun(inMemory({ prView: () => ({ state: "MERGED", mergeable: "MERGEABLE", baseRefName: "main" }) }), config())
     .checksNeeds()
     .prMergeability(pr);
   assert.equal(gone, undefined, "nothing is handed off or labeled on a PR no longer open");
@@ -143,7 +143,7 @@ const failure = (kind: "verdict" | "merge-gate" | "ci", name: string, runId = "9
 });
 
 const outputOf = (reads: RunNeeds, failures: readonly CheckFailure[]): Promise<string> =>
-  assembleRun(reads, facts()).checksNeeds().failuresOutput(failures);
+  assembleRun(reads, config()).checksNeeds().failuresOutput(failures);
 
 test("a failing verdict is reported as the reviewer wrote it: its PR body section and its summary", async () => {
   const reads = inMemory({

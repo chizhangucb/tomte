@@ -24,11 +24,14 @@ import { RATE_LIMITED_FILE } from "../lib/accounts.ts";
 import { gh } from "../lib/gh.ts";
 import { outputDir } from "../lib/run-output.ts";
 import { type CheckRun, type CommitStatus, type MergeGateArtifact } from "./checks.ts";
-import { type MergeGateFiles, type RunNeeds } from "./assemble.ts";
+import { type MergeGateFiles, type RunConfig, type RunNeeds } from "./assemble.ts";
 
 /** How many times, and how long apart, the artifact of a merge gate run is asked for. */
 const ARTIFACT_TRIES = 6;
 const ARTIFACT_WAIT_MS = 10_000;
+
+/** Wait, the run's own: the entry point hands the same one to the assembly, so one run has one clock. */
+type Sleep = RunConfig["sleep"];
 
 const readIf = (file: string): string | undefined => (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : undefined);
 
@@ -75,9 +78,6 @@ const downloadArtifacts = async (repo: string, runId: string, dir: string, sleep
     }
   }
 };
-
-/** Wait, the run's own: the entry point hands the same one to the assembly, so one run has one clock. */
-type Sleep = (ms: number) => Promise<void>;
 
 /**
  * The GitHub- and disk-backed reads of one retry run, against one target repo.
