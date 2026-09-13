@@ -18,5 +18,4 @@ export const TARGET_REPOS: readonly string[] = [
   "chizhangucb/tomte-fixture",
   "chizhangucb/chronicle",
   "chizhangucb/chizhang-2",
-  "chizhangucb/tomte",
 ];
