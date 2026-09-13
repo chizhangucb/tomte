@@ -45,6 +45,24 @@ import { type JobSummary, type Needs, type OpenPr } from "../dispatch/sweep.ts";
 import { type Author } from "./trusted-authors.ts";
 import { GhError, gh } from "./gh.ts";
 
+/** How many commits on `base` a head lacks, from the compare API. Shared by both factories below. */
+const behindByOf = (repo: string, base: string, sha: string): number =>
+  Number(gh(["api", `repos/${repo}/compare/${base}...${sha}`, "--jq", ".behind_by"]).trim());
+
+/**
+ * A read whose command answered with something other than JSON is a failure of
+ * that command, thrown in the shape `gh` throws (`GhError`): the command and
+ * the cause, no stack, no token. Shared by both factories below.
+ */
+const ghJson = (args: string[], env?: NodeJS.ProcessEnv): any => {
+  const out = gh(args, env);
+  try {
+    return JSON.parse(out);
+  } catch {
+    throw new GhError(args, new Error(`printed something other than JSON: ${out.slice(0, 200)}`));
+  }
+};
+
 /**
  * The GitHub-backed target repo for one owner/repo, on one base branch. Its
  * functions are the sweep's `Needs`; another script's record is a subset of the
@@ -54,20 +72,6 @@ export const targetRepo = (repo: string, base: string): Needs => {
   // The reading key overrides the writing one for the reads a fine-grained PAT
   // cannot make. Read once here so no function names a key (#281).
   const readEnv = { ...process.env, GH_TOKEN: process.env.READ_TOKEN || process.env.GH_TOKEN };
-
-  /**
-   * A read whose command answered with something other than JSON is a failure of
-   * that command, thrown in the shape `gh` throws (`GhError`): the command and
-   * the cause, no stack, no token.
-   */
-  const ghJson = (args: string[], env?: NodeJS.ProcessEnv): any => {
-    const out = gh(args, env);
-    try {
-      return JSON.parse(out);
-    } catch {
-      throw new GhError(args, new Error(`printed something other than JSON: ${out.slice(0, 200)}`));
-    }
-  };
 
   /** All pages of `endpoint`, each projected by gh to the fields the reconciler maps, one item per line. */
   const paginate = (endpoint: string, projection: Projection, env?: NodeJS.ProcessEnv): any[] => {
@@ -126,7 +130,7 @@ export const targetRepo = (repo: string, base: string): Needs => {
 
   const commitDate = (sha: string): string => gh(["api", `repos/${repo}/commits/${sha}`, "--jq", ".commit.committer.date"]).trim();
 
-  const behindBy = (sha: string): number => Number(gh(["api", `repos/${repo}/compare/${base}...${sha}`, "--jq", ".behind_by"]).trim());
+  const behindBy = (sha: string): number => behindByOf(repo, base, sha);
 
   /**
    * Whoever opened a ticket, via REST because `gh issue view --json` carries no
@@ -169,5 +173,70 @@ export const targetRepo = (repo: string, base: string): Needs => {
       gh(["api", "--method", "POST", `repos/${repo}/dispatches`, "-f", `event_type=${eventType}`, "-F", `client_payload[pr]=${pr}`, "--silent"]),
     // The same call the implement workflow's non-fatal step makes, and idempotent.
     armAutoMerge: (pr) => gh(["pr", "merge", String(pr), "--repo", repo, "--auto", "--squash"]),
+  };
+};
+
+/**
+ * The GitHub-backed target repo for update-branch (#287): the reads and writes
+ * in `UpdateBranchNeeds`. Kept a separate factory from the sweep's so this
+ * module stays free of any `update-branch/` import, which would drag those files
+ * into the dispatch job's cone; the return type is inferred and satisfies
+ * `UpdateBranchNeeds` structurally where `update-branch-run.ts` assembles it.
+ *
+ * The status key lives here, not in the script: commit statuses are the one read
+ * and the one write a fine-grained PAT cannot make, so `statuses` and
+ * `postStatus` use `STATUS_TOKEN` (update-branch's current name for the reading
+ * key; #282 folds it into `READ_TOKEN` with the sweep's) over `GH_TOKEN`.
+ * Everything else uses the write key `GH_TOKEN`: the update call's merge commit
+ * has to fire no `pull_request` event under a fine-grained PAT for CI to re-run.
+ *
+ * Every function throws `GhError`, and `requestUpdate` throws the two documented
+ * 422s the same way; `update-branch.ts` reads them back off the error's fields.
+ */
+export const updateBranchTargetRepo = (repo: string, base: string) => {
+  const statusEnv = { ...process.env, GH_TOKEN: process.env.STATUS_TOKEN || process.env.GH_TOKEN };
+
+  return {
+    openPrs: () =>
+      ghJson([
+        "pr", "list", "--repo", repo, "--state", "open", "--base", base, "--limit", "200",
+        "--json", "number,headRefOid,headRefName,body,autoMergeRequest,mergeable,labels",
+      ]).map((raw: any) => ({
+        number: raw.number,
+        headRef: raw.headRefName,
+        headRefOid: raw.headRefOid,
+        body: raw.body ?? "",
+        autoMerge: raw.autoMergeRequest !== null && raw.autoMergeRequest !== undefined,
+        mergeable: raw.mergeable === "MERGEABLE" || raw.mergeable === "CONFLICTING" ? raw.mergeable : "UNKNOWN",
+        labels: raw.labels.map((l: any) => l.name),
+      })),
+
+    behindBy: (sha: string) => behindByOf(repo, base, sha),
+
+    statuses: (sha: string) => ghJson(["api", `repos/${repo}/commits/${sha}/status`, "--jq", ".statuses"], statusEnv),
+
+    commit: (sha: string) => {
+      const raw = ghJson(["api", `repos/${repo}/commits/${sha}`, "--jq", "{sha, parents: [.parents[].sha], committerLogin: .committer.login}"]);
+      return { sha: raw.sha, parents: raw.parents, committerLogin: raw.committerLogin ?? null };
+    },
+
+    headOf: (pr: number) => gh(["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid", "--jq", ".headRefOid"]).trim(),
+
+    requestUpdate: (pr: number, expectedHead: string) => {
+      gh(["api", "--method", "PUT", `repos/${repo}/pulls/${pr}/update-branch`, "-f", `expected_head_sha=${expectedHead}`, "--silent"]);
+    },
+
+    postStatus: (sha: string, status: { state: string; context: string; description: string | null; target_url: string | null }) => {
+      gh([
+        "api", "--method", "POST", `repos/${repo}/statuses/${sha}`,
+        "-f", `state=${status.state}`, "-f", `context=${status.context}`,
+        "-f", `description=${status.description ?? ""}`, "-f", `target_url=${status.target_url ?? ""}`,
+        "--silent",
+      ], statusEnv);
+    },
+
+    comment: (pr: number, body: string) => gh(["pr", "comment", String(pr), "--repo", repo, "--body", body]),
+
+    addLabel: (pr: number, label: string) => gh(["pr", "edit", String(pr), "--repo", repo, "--add-label", label]),
   };
 };

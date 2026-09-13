@@ -45,12 +45,22 @@ jobs:
           path: factory
           token: ${{ secrets.FACTORY_PAT }}
           persist-credentials: false
+          # update-branch-run.ts assembles its record from the shared Target
+          # repo module (#287), so the module's tree is in the cone too.
+          # strip-types-cone.test.ts pins this list to what the entry reaches.
           sparse-checkout: |
             factory/update-branch
+            factory/dispatch/gh-read.ts
+            factory/dispatch/reconcile.ts
+            factory/dispatch/sweep.ts
             factory/lib/errors.ts
             factory/lib/factory-pr.ts
             factory/lib/gh.ts
             factory/lib/labels.ts
+            factory/lib/linked-issue.ts
+            factory/lib/target-repo.ts
+            factory/lib/trusted-authors.ts
+            factory/retry/escalation.ts
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -66,7 +76,7 @@ jobs:
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           OUTPUT_DIR: ${{ runner.temp }}/factory-out
-        run: node --experimental-strip-types factory/factory/update-branch/update-branch.ts
+        run: node --experimental-strip-types factory/factory/update-branch/update-branch-run.ts
 
       - name: Upload decisions
         if: always()
