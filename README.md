@@ -48,7 +48,7 @@ A target repo on GitHub, plus:
 
 Then label a ticket `ready-for-agent` and the pipeline above runs. To hold a ready ticket back, add `hold`. Labeling `agent:implement` by hand also works.
 
-**Two conditional extras**, both in `docs/factory/caller-inputs.md`: a target with two kinds of test needs a **routing test command** (`templates/routing-test-command.sh`), and any producer opening its own PR (an interactive session, a cloud agent) needs the judged-path line (`templates/agents-md-judged-path.md`) in its `AGENTS.md` — its branch has to be in the target, not a fork, or the PR is refused.
+**Two conditional extras**, both in `docs/factory/caller-inputs.md`: a target with two kinds of test needs a **routing test command** (`templates/routing-test-command.sh`), and any producer opening its own PR (an interactive session, a cloud agent) needs the judged-path line (`templates/agents-md-judged-path.md`) in its `AGENTS.md`; its branch has to be in the target, not a fork, or the PR is refused.
 
 ## Operate a target
 
@@ -74,7 +74,7 @@ Don't use `gh workflow disable factory.yml` to pause: it takes `merge-gate` and 
 
 ## Where to read more
 
-- `docs/pipeline.md` — the router: a pointer per topic into `docs/factory/`, where every caller input, every stage in full, the failure paths, the engine, and the onboarding caveats a target migrated across versions live.
+- `docs/pipeline.md`, the router: a pointer per topic into `docs/factory/`, where every caller input, every stage in full, the failure paths, the engine, and the onboarding caveats a target migrated across versions live.
 - `CONTEXT.md` — the glossary. `docs/adr/` — the decisions. The spec is issue #9.
 - `docs/provenance/` — why the engine was vendored from sandcastle rather than forked, file by file.
 - `docs/agents/` — the rules binding an agent working in this repo.
