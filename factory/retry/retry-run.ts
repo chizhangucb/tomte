@@ -1,7 +1,7 @@
 /**
  * The retry handler's entry point (#284): what the agent workflows run when an
  * attempt fails. It reads the env, assembles the handler's `RetryNeeds` record
- * from `lib/target-repo.ts` and the run's own reads from `run-reads.ts`,
+ * from `lib/target-repo.ts` and the run's own reads from `run-needs.ts`,
  * resolves the target, builds the failure through `assemble.ts`, and hands both
  * to `retry.ts`'s `main`, which decides and writes. The decisions and the writes
  * are `retry.ts`'s, what is assembled from a read is `assemble.ts`'s; this file
@@ -9,7 +9,7 @@
  *
  * Two records, because they read for two different purposes (#315): the
  * handler's `RetryNeeds` is what it writes the outcome through, and the run's
- * `RunReads` is what one failed attempt is described from (the job's own output
+ * `RunNeeds` is what one failed attempt is described from (the job's own output
  * on disk, another run's log, a merge gate artifact, a head's checks). Each has
  * a production adapter and an in-memory stand-in, so `retry.test.ts` rehearses
  * the handler and `assemble.test.ts` rehearses the assembly, neither on `gh`.
@@ -42,7 +42,7 @@ import { required } from "../lib/env";
 import { errorMessage } from "../lib/errors";
 import { retryTargetRepo } from "../lib/target-repo.ts";
 import { assembleRun } from "./assemble.ts";
-import { runReads } from "./run-reads.ts";
+import { runNeeds } from "./run-needs.ts";
 import { isImplementerFailure } from "./decide.ts";
 import {
   type ChecksWait,
@@ -67,15 +67,18 @@ const POLL_MS = 20_000;
 /** The head and the clock bounds of the wait, the workflow's `HEAD_SHA` and timeout. */
 const checksWait = (): ChecksWait => ({ sha: required("HEAD_SHA"), timeoutMs: CHECKS_TIMEOUT_MS, pollMs: POLL_MS });
 
+/** One wait for the whole run: the assembly's polls and the adapter's waits for an artifact share it. */
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 const run = async (): Promise<void> => {
   const needs: RetryNeeds = retryTargetRepo(REPO, BRANCH);
   const config: RetryConfig = { branch: BRANCH, runUrl: RUN_URL, failureKind: FAILURE_KIND as "implement" | "checks" };
   // The run's own reads, wired to `gh` and the disk, and the assembly over them:
   // the wall clock and this run's identity are what it cannot read (#315).
-  const assembly = assembleRun(runReads(REPO), {
+  const assembly = assembleRun(runNeeds(REPO, sleep), {
     own: { workflowName: WORKFLOW, runId: RUN_ID },
     now: () => new Date(),
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    sleep,
   });
 
   const resolved = resolveTarget(needs);

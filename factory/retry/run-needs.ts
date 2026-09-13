@@ -1,6 +1,6 @@
 /**
  * The retry run's reads, wired to `gh` and the disk (#315): the production
- * adapter behind `assemble.ts`'s `RunReads` record, the way
+ * adapter behind `assemble.ts`'s `RunNeeds` record, the way
  * `lib/target-repo.ts` is the production adapter behind the handler's
  * `RetryNeeds`. `retry-run.ts` builds one and hands it to the assembly; a test
  * hands the assembly an in-memory stand-in instead, so what the run assembles
@@ -24,7 +24,7 @@ import { RATE_LIMITED_FILE } from "../lib/accounts.ts";
 import { gh } from "../lib/gh.ts";
 import { outputDir } from "../lib/run-output.ts";
 import { type CheckRun, type CommitStatus, type MergeGateArtifact } from "./checks.ts";
-import { type MergeGateFiles, type RunReads } from "./assemble.ts";
+import { type MergeGateFiles, type RunNeeds } from "./assemble.ts";
 
 /** How many times, and how long apart, the artifact of a merge gate run is asked for. */
 const ARTIFACT_TRIES = 6;
@@ -33,8 +33,6 @@ const ARTIFACT_WAIT_MS = 10_000;
 const readIf = (file: string): string | undefined => (fs.existsSync(file) ? fs.readFileSync(file, "utf8") : undefined);
 
 const inOutputDir = (name: string): string => path.join(outputDir(), name);
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 const ghJson = <T>(args: string[]): T => JSON.parse(gh(args)) as T;
 
@@ -65,7 +63,7 @@ const findFile = (dir: string, name: string): string | undefined => {
 };
 
 /** The artifact lands a few seconds after the statuses: try a few times, then throw as `gh` threw. */
-const downloadArtifacts = async (repo: string, runId: string, dir: string): Promise<void> => {
+const downloadArtifacts = async (repo: string, runId: string, dir: string, sleep: Sleep): Promise<void> => {
   for (let attempt = 1; ; attempt++) {
     try {
       gh(["run", "download", runId, "--repo", repo, "--dir", dir]);
@@ -78,8 +76,15 @@ const downloadArtifacts = async (repo: string, runId: string, dir: string): Prom
   }
 };
 
-/** The GitHub- and disk-backed reads of one retry run, against one target repo. */
-export const runReads = (repo: string): RunReads => ({
+/** Wait, the run's own: the entry point hands the same one to the assembly, so one run has one clock. */
+type Sleep = (ms: number) => Promise<void>;
+
+/**
+ * The GitHub- and disk-backed reads of one retry run, against one target repo.
+ * The wait between tries for a merge gate artifact is the caller's `sleep`,
+ * the one the run was built with.
+ */
+export const runNeeds = (repo: string, sleep: Sleep): RunNeeds => ({
   failureReason: () => readIf(inOutputDir("failure_reason.txt")),
   rateLimited: () => fs.existsSync(inOutputDir(RATE_LIMITED_FILE)),
   newestRunLog,
@@ -88,10 +93,16 @@ export const runReads = (repo: string): RunReads => ({
 
   failedRunLog: (runId) => gh(["run", "view", runId, "--repo", repo, "--log-failed"]),
 
+  /**
+   * Throws when the download fails, and when no temp dir can be made for it:
+   * the assembly shrugs both off, so a merge gate output nothing can be read
+   * for costs the retry marker that detail rather than the run (the pre-seam
+   * entry point failed the run on the second of those).
+   */
   mergeGateArtifact: async (runId): Promise<MergeGateFiles | undefined> => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "merge-gate-artifact-"));
     try {
-      await downloadArtifacts(repo, runId, dir);
+      await downloadArtifacts(repo, runId, dir, sleep);
       const mergeGateFile = findFile(dir, "merge-gate.json");
       if (!mergeGateFile) return undefined;
       const beside = (name: string) => readIf(path.join(path.dirname(mergeGateFile), name));

@@ -15,10 +15,10 @@ import { GhError } from "../lib/gh.ts";
 import { type CheckFailure } from "./checks.ts";
 import { RATE_LIMITED_REASON } from "./decide.ts";
 import { SECTION_END, SECTION_START } from "../lib/verdict.ts";
-import { assembleRun, type RunFacts, type RunReads } from "./assemble.ts";
+import { assembleRun, type RunConfig, type RunNeeds } from "./assemble.ts";
 
 /** An in-memory stand-in for the run's reads: every read answers from memory, none reaches `gh` or the disk. */
-const inMemory = (overrides: Partial<RunReads> = {}): RunReads => ({
+const inMemory = (overrides: Partial<RunNeeds> = {}): RunNeeds => ({
   failureReason: () => undefined,
   rateLimited: () => false,
   newestRunLog: () => undefined,
@@ -33,7 +33,7 @@ const inMemory = (overrides: Partial<RunReads> = {}): RunReads => ({
   ...overrides,
 });
 
-const facts = (overrides: Partial<RunFacts> = {}): RunFacts => ({
+const facts = (overrides: Partial<RunConfig> = {}): RunConfig => ({
   own: { workflowName: "Implement", runId: "900" },
   now: () => new Date("2026-09-13T00:00:00Z"),
   sleep: async () => {},
@@ -76,7 +76,6 @@ const checkRun = (name: string, runId: string, conclusion: string | null, status
   conclusion,
   html_url: `https://github.com/o/r/actions/runs/${runId}/job/1`,
 });
-
 
 test("a head's checks are judged with each check run's workflow read, and this run's own is not the target's CI", () => {
   const asked: string[] = [];
@@ -143,7 +142,7 @@ const failure = (kind: "verdict" | "merge-gate" | "ci", name: string, runId = "9
   url: `https://github.com/o/r/actions/runs/${runId}`,
 });
 
-const outputOf = (reads: RunReads, failures: readonly CheckFailure[]): Promise<string> =>
+const outputOf = (reads: RunNeeds, failures: readonly CheckFailure[]): Promise<string> =>
   assembleRun(reads, facts()).checksNeeds().failuresOutput(failures);
 
 test("a failing verdict is reported as the reviewer wrote it: its PR body section and its summary", async () => {
@@ -160,6 +159,14 @@ test("a failing verdict is reported as the reviewer wrote it: its PR body sectio
 test("a verdict whose files the job never wrote says so rather than reporting an empty failure", async () => {
   const output = await outputOf(inMemory(), [failure("verdict", "factory/verdict")]);
   assert.match(output, /\(the verdict files were not found\)/);
+});
+
+test("a verdict the reviewer summarised but posted no section for is reported from the summary", async () => {
+  const output = await outputOf(inMemory({ verdictPrBody: () => "Closes #7", verdictSummary: () => "the run died before it posted" }), [
+    failure("verdict", "factory/verdict"),
+  ]);
+  assert.match(output, /the run died before it posted/);
+  assert.doesNotMatch(output, /the verdict files were not found/);
 });
 
 test("a merge gate failure is reported from the run's artifact, read once for every failure of that run", async () => {

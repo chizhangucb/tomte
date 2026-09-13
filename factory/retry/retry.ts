@@ -12,7 +12,7 @@
  * way: its clock and its reads come through a `ChecksNeeds` record, so a test
  * drives each outcome by advancing the injected clock rather than waiting. The
  * log and artifact reads behind that wait go through the run's own record
- * (`assemble.ts`'s `RunReads`, #315) rather than living in the entry point.
+ * (`assemble.ts`'s `RunNeeds`, #315) rather than living in the entry point.
  *
  * The outcomes, each rehearsable against the record:
  * - retry: post the failing output as a marker comment on the ticket, add

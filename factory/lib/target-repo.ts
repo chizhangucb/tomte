@@ -323,7 +323,7 @@ export const dispatchNeeds = (repo: string): DispatchNeeds => {
  * mergeability) are not here: they build the checks-path failure, which
  * `retry/assemble.ts` turns into the `ChecksNeeds` record `waitForChecks` runs
  * on (#285). They have their own record and their own production adapter,
- * `retry/run-reads.ts` (#315), beside the log and artifact reads.
+ * `retry/run-needs.ts` (#315), beside the log and artifact reads.
  */
 export const retryTargetRepo = (repo: string, branch: string) => {
   // The same two keys the sweep and update-branch resolve (#282, #288): reads (a

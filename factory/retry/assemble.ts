@@ -1,10 +1,10 @@
 /**
  * What the retry run assembles from its reads (#315): the failure a failed
  * implementer attempt becomes, and the record the wait for a head's checks
- * reads through. Every read it makes comes through the `RunReads` record it is
+ * reads through. Every read it makes comes through the `RunNeeds` record it is
  * handed, so this assembly is rehearsed against an in-memory stand-in
  * (`assemble.test.ts`) rather than against a live `gh`; `retry-run.ts` hands it
- * the real `gh`/fs reads from `run-reads.ts`. The pattern is `target-repo.ts`'s
+ * the real `gh`/fs reads from `run-needs.ts`. The pattern is `target-repo.ts`'s
  * and the record is CONTEXT.md's **Needs record**.
  *
  * Nothing is decided here. What the handler does with the failure is
@@ -46,16 +46,20 @@ export interface MergeGateFiles {
 /**
  * Everything the retry run reads, as named domain reads rather than `gh`
  * commands or file paths: the job's own output on disk, and the target repo's
- * runs, artifacts and checks. Handed in from outside, `run-reads.ts` in
+ * runs, artifacts and checks. Handed in from outside, `run-needs.ts` in
  * production and an in-memory stand-in in a test. A read that cannot be made
  * throws, as `target-repo.ts`'s do; which of those the assembly shrugs off is
  * its own policy, above.
+ *
+ * A **needs record** in CONTEXT.md's sense, with one widening it names here: a
+ * retry run is described from the job's own output as much as from the target
+ * repo, so both are in the one record the run is handed.
  *
  * Its own record, not the handler's `RetryNeeds` and not the PR-context reads:
  * these are the reads one failed attempt is described from, and a record over
  * more than that would be a bag nobody's caller uses the whole of.
  */
-export interface RunReads {
+export interface RunNeeds {
   /** What the implementer wrote as the reason it ended badly, or undefined when it wrote none. */
   readonly failureReason: () => string | undefined;
   /** Whether every account was rate limited, from the marker the rotation leaves behind. */
@@ -84,15 +88,24 @@ export interface RunReads {
   readonly prView: (number: string) => { state: string; mergeable: Mergeability; baseRefName: string };
 }
 
-/** What the run knows of itself rather than reads: its own identity, and its clock. */
-export interface RunFacts {
+/**
+ * What the run was started with rather than reads: its own identity, and the
+ * clock the wait runs on. The shape `update-branch.ts`'s `UpdateBranchConfig`
+ * has, a `sleep` among it for the same reason: injected, so a test's wait costs
+ * no wall-clock time.
+ */
+export interface RunConfig {
   /** This run's own workflow and id, so the factory's own check runs are not read as the target's CI. */
   readonly own: { readonly workflowName: string; readonly runId: string };
-  /** The wait's clock, injected rather than read here so a test advances it. */
+  /** When the wait is running, injected rather than read here so a test advances it. */
   readonly now: () => Date;
-  /** Wait one poll, injected so a test's wait costs no wall-clock time. */
+  /** Wait one poll. */
   readonly sleep: (ms: number) => Promise<void>;
 }
+
+/** Why a read the run could not make left an output short of its detail, in one sentence for every such read. */
+const unreadable = (what: string, runId: string, error: unknown): string =>
+  `(could not read ${what} of run ${runId}: ${errorMessage(error)})`;
 
 /** A read that only adds detail to an output: its failure is logged and shrugged off. */
 const tryRead = <T>(read: () => T): T | undefined => {
@@ -105,29 +118,29 @@ const tryRead = <T>(read: () => T): T | undefined => {
 };
 
 /** The newest run log, tailed and headed with which log it was: what a marker comment carries. */
-const runLogTail = (reads: RunReads): string => {
-  const log = reads.newestRunLog();
+const runLogTail = (needs: RunNeeds): string => {
+  const log = needs.newestRunLog();
   if (!log) return "";
   const lines = log.text.split("\n");
   return `Log tail (${log.name}, last ${Math.min(LOG_TAIL_LINES, lines.length)} lines):\n${lines.slice(-LOG_TAIL_LINES).join("\n")}`;
 };
 
 /** The verdict this job just produced, as the reviewer wrote it: the PR body's section, then the summary. */
-const verdictOutput = (reads: RunReads): string => {
-  const body = reads.verdictPrBody() ?? "";
+const verdictOutput = (needs: RunNeeds): string => {
+  const body = needs.verdictPrBody() ?? "";
   const start = body.indexOf(SECTION_START);
   const end = body.indexOf(SECTION_END);
   const section = start !== -1 && end !== -1 ? body.slice(start + SECTION_START.length, end).trim() : "";
-  const summary = reads.verdictSummary()?.trim() ?? "";
+  const summary = needs.verdictSummary()?.trim() ?? "";
   return [section, summary].filter(Boolean).join("\n\n") || "(the verdict files were not found)";
 };
 
 /**
- * The retry run's assembly over one set of reads. Built per run, so a read it
+ * The retry run's assembly over one set of needs. Built per run, so a read it
  * would repeat within one run (a run's workflow name, a merge gate run's
  * artifact) is made once and answered from memory after that.
  */
-export const assembleRun = (reads: RunReads, facts: RunFacts) => {
+export const assembleRun = (needs: RunNeeds, config: RunConfig) => {
   const workflowNames = new Map<string, string | undefined>();
   const mergeGateOutputs = new Map<string, string>();
 
@@ -136,9 +149,9 @@ export const assembleRun = (reads: RunReads, facts: RunFacts) => {
     const runId = runIdFromUrl(url);
     if (!runId) return `(no run log: ${url ?? "no url"})`;
     try {
-      return boundOutput(reads.failedRunLog(runId).trim() || "(the run has no failed step log)", LOG_LIMITS);
+      return boundOutput(needs.failedRunLog(runId).trim() || "(the run has no failed step log)", LOG_LIMITS);
     } catch (error) {
-      return `(could not read the log of run ${runId}: ${errorMessage(error)})`;
+      return unreadable("the log", runId, error);
     }
   };
 
@@ -150,12 +163,12 @@ export const assembleRun = (reads: RunReads, facts: RunFacts) => {
     if (cached !== undefined) return cached;
     let output: string;
     try {
-      const files = await reads.mergeGateArtifact(runId);
+      const files = await needs.mergeGateArtifact(runId);
       output = files
         ? renderMergeGateOutput(files.mergeGate, { base: files.baseLog, head: files.headLog })
         : `(the merge gate run ${runId} uploaded no merge-gate.json)\n${failedLog(url)}`;
     } catch (error) {
-      output = `(could not read the merge gate artifact of run ${runId}: ${errorMessage(error)})\n${failedLog(url)}`;
+      output = `${unreadable("the merge gate artifact", runId, error)}\n${failedLog(url)}`;
     }
     mergeGateOutputs.set(runId, output);
     return output;
@@ -163,7 +176,7 @@ export const assembleRun = (reads: RunReads, facts: RunFacts) => {
 
   const failureOutput = async (f: CheckFailure): Promise<string> => {
     const detail =
-      f.kind === "verdict" ? verdictOutput(reads) : f.kind === "merge-gate" ? await mergeGateOutput(f.url) : failedLog(f.url);
+      f.kind === "verdict" ? verdictOutput(needs) : f.kind === "merge-gate" ? await mergeGateOutput(f.url) : failedLog(f.url);
     return `## ${f.name}: ${f.kind} failure${f.description ? ` (${f.description})` : ""}\n${f.url ?? ""}\n\n${detail}`;
   };
 
@@ -171,15 +184,15 @@ export const assembleRun = (reads: RunReads, facts: RunFacts) => {
   const workflowNameOf = (run: CheckRun): string | undefined => {
     const runId = runIdFromUrl(run.html_url);
     if (!runId) return undefined;
-    if (!workflowNames.has(runId)) workflowNames.set(runId, tryRead(() => reads.workflowName(runId))?.trim());
+    if (!workflowNames.has(runId)) workflowNames.set(runId, tryRead(() => needs.workflowName(runId))?.trim());
     return workflowNames.get(runId);
   };
 
   const readChecks = (sha: string): CheckState =>
     evaluateChecks({
-      statuses: reads.commitStatuses(sha),
-      checkRuns: reads.checkRuns(sha).map((run) => ({ ...run, workflowName: workflowNameOf(run) })),
-      own: facts.own,
+      statuses: needs.commitStatuses(sha),
+      checkRuns: needs.checkRuns(sha).map((run) => ({ ...run, workflowName: workflowNameOf(run) })),
+      own: config.own,
     });
 
   /**
@@ -187,7 +200,7 @@ export const assembleRun = (reads: RunReads, facts: RunFacts) => {
    * as the handler waited: nothing is handed off or labeled on a PR no longer open.
    */
   const prMergeability = (pr: OpenPr): PrMergeability | undefined => {
-    const view = reads.prView(pr.number);
+    const view = needs.prView(pr.number);
     return view.state === "OPEN" ? { pr, mergeable: view.mergeable, base: view.baseRefName } : undefined;
   };
 
@@ -198,12 +211,12 @@ export const assembleRun = (reads: RunReads, facts: RunFacts) => {
      * requeue a rate-limited attempt asks for, since no account was reached (#17).
      */
     implementFailure: (outcome: string): Failure => {
-      const reason = reads.failureReason()?.trim() || missingFailureReason(outcome);
+      const reason = needs.failureReason()?.trim() || missingFailureReason(outcome);
       return {
         kind: "implement",
         summary: `implement: ${reason.split("\n")[0]}`,
-        output: [`Reason: ${reason}`, boundOutput(runLogTail(reads), LOG_LIMITS)].filter(Boolean).join("\n\n"),
-        requeue: reads.rateLimited() ? RATE_LIMITED_REASON : undefined,
+        output: [`Reason: ${reason}`, boundOutput(runLogTail(needs), LOG_LIMITS)].filter(Boolean).join("\n\n"),
+        requeue: needs.rateLimited() ? RATE_LIMITED_REASON : undefined,
       };
     },
 
@@ -213,8 +226,8 @@ export const assembleRun = (reads: RunReads, facts: RunFacts) => {
      * The loop and the decision stay `retry.ts`'s `waitForChecks`.
      */
     checksNeeds: (): ChecksNeeds => ({
-      now: facts.now,
-      sleep: facts.sleep,
+      now: config.now,
+      sleep: config.sleep,
       readChecks,
       prMergeability,
       /** Every failing check's output, joined the way a retry marker comment carries it. */
