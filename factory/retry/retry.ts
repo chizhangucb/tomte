@@ -10,8 +10,9 @@
  * failure, decide with `decide.ts` and act. It also holds the wait for a head's
  * checks (`waitForChecks`, #285), which builds the checks-path failure the same
  * way: its clock and its reads come through a `ChecksNeeds` record, so a test
- * drives each outcome by advancing the injected clock rather than waiting. Only
- * the log and artifact reads behind that wait stay in the entry point.
+ * drives each outcome by advancing the injected clock rather than waiting. The
+ * log and artifact reads behind that wait go through the run's own record
+ * (`assemble.ts`'s `RunReads`, #315) rather than living in the entry point.
  *
  * The outcomes, each rehearsable against the record:
  * - retry: post the failing output as a marker comment on the ticket, add
@@ -128,7 +129,7 @@ export interface ChecksNeeds {
   readonly readChecks: (sha: string) => CheckState;
   /** The open PR's mergeability and base; undefined once it is no longer open (it closed or merged mid-wait). */
   readonly prMergeability: (pr: OpenPr) => PrMergeability | undefined;
-  /** The failing checks' output, joined; the log and artifact reads behind it stay in the entry point. */
+  /** The failing checks' output, joined; the log and artifact reads behind it go through `assemble.ts`'s record. */
   readonly failuresOutput: (failures: readonly CheckFailure[]) => Promise<string>;
 }
 
