@@ -71,7 +71,10 @@ const WRITE_SITES: readonly {
   {
     module: "factory/retry/escalation.ts",
     site: "prEscalation",
-    writer: "factory/retry/retry.ts",
+    // The plan the handler applies, not the handler (#310): `planFor` is where
+    // the close is decided on and written down, and `retry.ts` only carries out
+    // the `close-pr` effect that arm planned.
+    writer: "factory/retry/plan.ts",
     writes: "closes the PR",
     decide: (pr) => prEscalation({ ...pr, labels: ["agent:review"] }),
   },
