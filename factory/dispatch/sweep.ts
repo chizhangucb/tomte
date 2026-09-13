@@ -6,7 +6,7 @@
  * of the heartbeat's `Pass`, and is handed it from outside (`sweep-run.ts` in
  * production, an in-memory target repo in `sweep.test.ts`). What it decides
  * does not change, only how it is wired: no `gh` call lives here now.
- * docs/pipeline.md, "How a script is wired", carries the pattern.
+ * docs/factory/layout.md, "How a script is wired", carries the pattern.
  *
  * A failed hard read aborts the pass with one `::error::` line and repairs
  * nothing from a partial snapshot. Which reads may fail softly is still this

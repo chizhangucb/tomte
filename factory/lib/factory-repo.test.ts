@@ -49,8 +49,9 @@ const read = (file: string): string => fs.readFileSync(new URL(file, repoRoot), 
 const RECORDS = new Set([
   // The page that tells the rename's own story, and cannot tell it without
   // naming what the repo was called: the procedure that answers a rename being
-  // an outage on every target.
-  "docs/pipeline.md",
+  // an outage on every target. Split out of docs/pipeline.md into the waiver
+  // topic file (#297), the outage being a waiver window.
+  "docs/factory/waiver.md",
   "docs/research/sandcastle-inventory-2026-09.md",
   "docs/research/sandcastle-peers-2026-09.md",
   "factory/dispatch/fixtures/pages/issues.json",
@@ -91,13 +92,13 @@ test("the caller template calls the factory by name, and calls only this factory
 });
 
 test("the caller-inputs table documents the default the workflows actually carry", () => {
-  // `docs/pipeline.md` is exempted from the hunt below, because it tells the
-  // rename's story and has to name the old repo to do it. That exemption would
-  // otherwise leave its one live copy, the `factory_repo` row in the caller
-  // inputs table, checked by nothing. So it is checked here instead.
-  const row = /\|\s*`factory_repo`\s*\|[^|]*\|\s*`([^`]+)`\s*\|/.exec(read("docs/pipeline.md"));
-  assert.ok(row, "docs/pipeline.md has no factory_repo row in its caller inputs table");
-  assert.equal(row[1], FACTORY_REPO, `docs/pipeline.md documents the default as ${row[1]}`);
+  // The caller-inputs table moved to its own topic file (#297). It is checked
+  // here so the `factory_repo` row's live copy of the default cannot drift from
+  // what the workflows carry.
+  const page = "docs/factory/caller-inputs.md";
+  const row = /\|\s*`factory_repo`\s*\|[^|]*\|\s*`([^`]+)`\s*\|/.exec(read(page));
+  assert.ok(row, `${page} has no factory_repo row in its caller inputs table`);
+  assert.equal(row[1], FACTORY_REPO, `${page} documents the default as ${row[1]}`);
 });
 
 test("no file still addresses the factory by the name it has left behind", () => {

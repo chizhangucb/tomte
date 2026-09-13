@@ -7,7 +7,7 @@ date: 2026-09-06
 
 The merge gate is required CI status checks (a read-only reviewer's `factory/verdict`, plus `factory/red-green` and `factory/test-integrity` proofs), and merge is GitHub's native auto-merge with no human and no LLM merger. At 50 PRs a month the maintainer will not read them, so unread human review is auto-merge in disguise; and an agent's "done" is a claim (Dex Horthy's lights-off outage, SlopCodeBench's 24% strict pass for Opus 5, Huntley's placeholder warning), so the proofs live in CI where they gate the merge rather than in a step the agent runs and reports on. The first 20 merges are each re-reviewed by an audit with a revert PR on a miss, since auto-merge from day one is only survivable if a second reader that never saw the code written can catch what the first missed.
 
-The mechanics (the ruleset, the checks, the verdict carry, conflict and retry handling, the audit) live in `docs/pipeline.md`. Two decisions this one implies have their own records: how merge lands without a queue (ADR 0006) and who may get a verdict (ADR 0007).
+The mechanics (the ruleset, the checks, the verdict carry, conflict and retry handling, the audit) live under `docs/factory/` (routed from `docs/pipeline.md`). Two decisions this one implies have their own records: how merge lands without a queue (ADR 0006) and who may get a verdict (ADR 0007).
 
 ## Considered Options
 

@@ -31,7 +31,7 @@ test("the hold label is unprefixed, so it reads as a human's instruction rather 
   // ordinary English word a target may already use for its own meaning, and
   // `onboard.sh` creates labels with `--force`, so onboarding rewrites such a
   // label in place and turns every issue already carrying it into a dispatch
-  // veto. `docs/pipeline.md` says to check for that before onboarding.
+  // veto. `docs/factory/onboarding.md` says to check for that before onboarding.
   assert.equal(HOLD_LABEL, "hold");
   assert.deepEqual(HOLD_LABELS, [HOLD_LABEL]);
 });

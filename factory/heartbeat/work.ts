@@ -16,7 +16,7 @@
  *
  * That much says a sweep could act on the subject. Whether it would act now is
  * the second question and the one that decides the bill (#264): `due` below is
- * that rule, and #264 and `docs/pipeline.md` carry the argument for it.
+ * that rule, and #264 and `docs/factory/dispatcher.md` carry the argument for it.
  *
  * Every label set is imported from the module that owns it, so a change to any
  * of them reaches the heartbeat with it, and the deadlines travel the same

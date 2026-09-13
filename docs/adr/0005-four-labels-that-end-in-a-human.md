@@ -25,7 +25,7 @@ The second decision is about the vocabulary as a whole. The dispatcher decides o
 
 - A fifth label that stops the factory and ends with a person amends this ADR, or it is the one nobody can place.
 - The guard is a test over lists somebody else owns, so it has two holes worth naming: a tenth default GitHub ships is uncovered until somebody adds it to the nine, and a label list added somewhere the test does not enumerate is not checked at all.
-- The rule is about GitHub's defaults, not about collisions in general. `hold` is an ordinary English word and unprefixed, so a target may already use it for something of its own; onboarding rewrites labels with `--force`, and `docs/pipeline.md` is where that hazard is named.
+- The rule is about GitHub's defaults, not about collisions in general. `hold` is an ordinary English word and unprefixed, so a target may already use it for something of its own; onboarding rewrites labels with `--force`, and `docs/factory/onboarding.md` is where that hazard is named.
 - This repo carries no caller, so no dispatcher reads its own labels and all four are notes here rather than orders. The day it becomes a target is the day they start meaning what this ADR says they mean.
 - Who writes `agent:blocked` is a list that grows, and this ADR fixes the meaning rather than the roster. #180 added update-branch declining a conflicting PR the factory did not author, and it is the clearest case of why the two sets matter: the label is in `HANDED_OFF_LABELS`, so the next run skips the PR instead of commenting again on every push to main, and in `PARKED_LABELS`, so the reconciler does not re-arm a PR it has already judged. Being in both is what makes a decline stick, and it is why adding a label here is never only adding a label.
 

@@ -4,7 +4,7 @@
  * the target repo as a `RetryNeeds` record and is handed them from outside
  * (`retry-run.ts` in production, an in-memory target repo in `retry.test.ts`).
  * No `gh` call lives here now; what the handler decides does not change, only
- * how it is wired. docs/pipeline.md, "How a script is wired", carries the pattern.
+ * how it is wired. docs/factory/layout.md, "How a script is wired", carries the pattern.
  *
  * This file is the failed-attempt path: given a resolved target and a built
  * failure, decide with `decide.ts` and act. It also holds the wait for a head's
