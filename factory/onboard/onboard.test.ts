@@ -27,9 +27,12 @@ const target = "chizhangucb/tomte-fixture";
 const SPEC_TITLE_BULLET =
   "- **A spec title starts `Spec:`**: prefix it after `/to-spec` publishes. The dispatcher skips any `Spec:` issue, sliced or not (#296).";
 /** A target's issue-tracker.md that already carries the rule, the case a re-run meets. */
-const ISSUE_TRACKER_WITH_RULE = `# Issue tracker\n\n## Tickets\n\n- **Create**: gh issue create\n${SPEC_TITLE_BULLET}\n`;
-/** One without it, the case the first onboarding of a spec-aware factory meets. */
-const ISSUE_TRACKER_WITHOUT_RULE = `# Issue tracker\n\n## Tickets\n\n- **Create**: gh issue create\n`;
+const ISSUE_TRACKER_WITH_RULE = `# Issue tracker\n\n## Tickets\n\n- **Create**: gh issue create\n${SPEC_TITLE_BULLET}\n\n## Pull requests\n\nblah\n`;
+/**
+ * One without it, in the standard Matt's-skills layout where `## Tickets` is not the last
+ * section. The bullet must land under Tickets, not at end-of-file under a later heading.
+ */
+const ISSUE_TRACKER_WITHOUT_RULE = `# Issue tracker\n\n## Tickets\n\n- **Create**: gh issue create\n- **Close**: gh issue close\n\n## Pull requests\n\nblah\n\n## Wayfinding\n\nmore\n`;
 const factoryChecks = ["factory/verdict", "factory/red-green", "factory/test-integrity"];
 
 /**
@@ -1038,6 +1041,12 @@ test("a target whose issue-tracker.md lacks the spec-title rule has it added", (
   assert.ok(run.issueTrackerWrite, "onboarding writes the file when the rule is missing");
   assert.ok(run.issueTrackerWrite!.includes(SPEC_TITLE_BULLET), "the bullet, verbatim");
   assert.ok(run.issueTrackerWrite!.includes("- **Create**: gh issue create"), "and the file's own content is kept");
+  // Placement: under `## Tickets`, not at end-of-file beneath a later heading.
+  const written = run.issueTrackerWrite!;
+  const bulletAt = written.indexOf(SPEC_TITLE_BULLET);
+  const ticketsAt = written.indexOf("## Tickets");
+  const nextHeadingAt = written.indexOf("## Pull requests");
+  assert.ok(bulletAt > ticketsAt && bulletAt < nextHeadingAt, "the bullet sits inside the Tickets section");
 });
 
 test("a target that already carries the rule is left untouched: onboarding is idempotent", () => {

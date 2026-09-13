@@ -170,11 +170,20 @@ but reads as missing would be refused as un-set-up." ;;
 fi
 issue_tracker_sha=$(jq -r '.sha // ""' <<<"$issue_tracker_json")
 issue_tracker_content=$(jq -r '(.content // "") | gsub("\n";"") | @base64d' <<<"$issue_tracker_json")
-# Idempotent: the rule's distinctive opening is the marker, so a re-run adds nothing and a
-# file that carries it, however the rest reads, is left alone.
+# Idempotent: the rule's backtick-qualified opening is the marker, distinctive enough that
+# unrelated prose does not read as the rule, so a re-run adds nothing and a file that carries
+# it, however the rest reads, is left alone. When it is missing, the bullet goes at the end of
+# the `## Tickets` section (the other ticket bullets live there), falling back to end-of-file
+# if the target's file has no such section.
 case "$issue_tracker_content" in
-  *"A spec title starts"*) ;;
-  *) write_issue_tracker=true; issue_tracker_new_content="$issue_tracker_content"$'\n'"$issue_tracker_bullet"$'\n' ;;
+  *'A spec title starts `Spec:`'*) ;;
+  *)
+    write_issue_tracker=true
+    issue_tracker_new_content=$(printf '%s' "$issue_tracker_content" | awk -v bullet="$issue_tracker_bullet" '
+      in_t && /^## / { print bullet; print ""; in_t=0; done=1 }
+      { print }
+      /^## Tickets[[:space:]]*$/ { in_t=1 }
+      END { if (in_t) { print bullet; done=1 }; if (!done) print bullet }') ;;
 esac
 caller_status=0
 caller=$(workflow_body factory.yml) || caller_status=$?
