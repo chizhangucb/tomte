@@ -19,6 +19,11 @@
  * assembled into `PullRequestReads`, and every failure is still the `GhError`
  * `lib/gh.ts` throws, so a body that could not be read reaches nobody as "this
  * ticket has no criteria".
+ *
+ * Imported with bare specifiers and free to import a package: no strip-types
+ * entrypoint reaches this module (`lib/strip-types-cone.test.ts` lists them),
+ * the three workflows that build the record installing the engine first. A
+ * cone that ever reaches it has to add the `.ts` extensions with it.
  */
 import { gh } from "./gh";
 import { safeSh, sh } from "./sh";
@@ -26,9 +31,9 @@ import type {
   LinkedIssueRead,
   PrContextNeeds,
   PullRequestComment,
-  PullRequestRead,
   PullRequestReview,
   PullRequestReviewThread,
+  PullRequestView,
 } from "../agent-workflows/shared/review-context";
 import type { IssueView } from "./ticket-context";
 
@@ -93,9 +98,17 @@ const readLinkedIssue = (issueNumber: string): LinkedIssueRead => {
   };
 };
 
-/** The PR's review threads, dug out of the one GraphQL answer; a PR with none reads as none. */
-const readReviewThreads = (prNumber: string): readonly PullRequestReviewThread[] => {
-  const [owner, repo] = (process.env.GH_REPO ?? "").split("/");
+/**
+ * The PR's review threads, dug out of the one GraphQL answer; a PR with none
+ * reads as none. The owner and the repo are GraphQL's required variables and
+ * come from the `owner/repo` the record was built for, the way every factory in
+ * `target-repo.ts` takes its repo rather than reading the env itself.
+ */
+const readReviewThreads = (
+  repoAddress: string,
+  prNumber: string,
+): readonly PullRequestReviewThread[] => {
+  const [owner, repo] = repoAddress.split("/");
   const parsed = JSON.parse(
     gh([
       "api",
@@ -122,14 +135,16 @@ const readReviewThreads = (prNumber: string): readonly PullRequestReviewThread[]
 };
 
 /**
- * The GitHub-backed PR-context reads: what the reviewer, implement-pr and the
- * audit hand `fetchPullRequestContext`.
+ * The GitHub-backed PR-context reads for one `owner/repo`: what the reviewer,
+ * implement-pr and the audit hand `fetchPullRequestContext`. Each of the three
+ * reads the address out of its own env (`GH_REPO`) and passes it here, so the
+ * record is built for a target rather than reading one out of the air.
  */
-export const prContextRepo = (): PrContextNeeds => ({
+export const prContextRepo = (repoAddress: string): PrContextNeeds => ({
   pr: (prNumber) =>
     JSON.parse(
       gh(["pr", "view", prNumber, "--json", "title,body,comments"]),
-    ) as PullRequestRead & { comments: PullRequestComment[] },
+    ) as PullRequestView & { comments: PullRequestComment[] },
 
   linkedIssue: readLinkedIssue,
 
@@ -138,7 +153,7 @@ export const prContextRepo = (): PrContextNeeds => ({
       gh(["api", `repos/{owner}/{repo}/pulls/${prNumber}/reviews`]),
     ) as PullRequestReview[],
 
-  reviewThreads: readReviewThreads,
+  reviewThreads: (prNumber) => readReviewThreads(repoAddress, prNumber),
 
   // The branch against the base, three dots first so a stale branch is judged on
   // its own change; two dots is the fallback when the merge base cannot be found.

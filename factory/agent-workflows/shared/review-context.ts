@@ -144,8 +144,12 @@ export interface LinkedIssueRead {
   readonly author: Author;
 }
 
-/** The pull request itself, as `gh pr view --json title,body,comments` returns it. */
-export interface PullRequestRead {
+/**
+ * The pull request itself, as `gh pr view --json title,body,comments` returns
+ * it. Named for gh's own subcommand, so it does not read as the singular of
+ * `PullRequestReads` below, which is all five reads rather than this one (#312).
+ */
+export interface PullRequestView {
   readonly title: string;
   readonly body?: string | null;
   readonly comments: readonly PullRequestComment[];
@@ -153,7 +157,7 @@ export interface PullRequestRead {
 
 /** The five reads `fetchPullRequestContext` makes, before any judgement. */
 export interface PullRequestReads {
-  readonly pr: PullRequestRead;
+  readonly pr: PullRequestView;
   /** The linked ticket, or undefined when the PR body links none. */
   readonly issue: LinkedIssueRead | undefined;
   readonly reviews: readonly PullRequestReview[];
@@ -177,7 +181,7 @@ export interface PullRequestReads {
  */
 export interface PrContextNeeds {
   /** The PR under review: its title, its body, and its top-level comments. */
-  readonly pr: (prNumber: string) => PullRequestRead;
+  readonly pr: (prNumber: string) => PullRequestView;
   /** The ticket the PR body links, and whoever opened it. Asked only when there is one. */
   readonly linkedIssue: (issueNumber: string) => LinkedIssueRead;
   /** The PR's submitted reviews, whose summaries are a channel of their own. */

@@ -51,6 +51,8 @@ import {
 } from "./report";
 
 const PR_NUMBER = required("PR_NUMBER");
+/** The target as `owner/repo`, the address the PR-context reads are made against. */
+const GH_REPO = required("GH_REPO");
 const MERGE_SHA = required("MERGE_SHA");
 const AUDIT_MODEL = required("AUDIT_MODEL");
 const RUN_URL = required("RUN_URL");
@@ -128,7 +130,7 @@ await runAgentWorkflow(
     // Whose words this run reads (story 27, ADR 0008), built once here.
     const policy = trustPolicyFromEnv();
     console.log(`Trusted authors: ${policy.associations.join(", ")}.`);
-    const context = fetchPullRequestContext(prContextRepo(), PR_NUMBER, policy, { diff });
+    const context = fetchPullRequestContext(prContextRepo(GH_REPO), PR_NUMBER, policy, { diff });
     console.log(describeDropped(context.dropped));
     const criteria = parseAcceptanceCriteria(context.issueBody);
     console.log(`Ticket #${context.issueNumber || "(none)"}: ${criteria.length} acceptance criteria.`);

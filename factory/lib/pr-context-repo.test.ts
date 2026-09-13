@@ -20,7 +20,9 @@ import { prContextRepo } from "./pr-context-repo";
 let stubDir: string;
 let logFile: string;
 let realPath: string | undefined;
-let savedRepo: string | undefined;
+
+/** The target the record under test is built for; GraphQL's two variables come from it. */
+const REPO = "chizhangucb/chronicle";
 
 /** Every command the stubs were handed, one per line, so a test reads what was asked. */
 const asked = (): string[] =>
@@ -75,10 +77,8 @@ before(() => {
   stubDir = fs.mkdtempSync(path.join(os.tmpdir(), "pr-context-stub-"));
   logFile = path.join(stubDir, "asked.log");
   realPath = process.env.PATH;
-  savedRepo = process.env.GH_REPO;
   process.env.PATH = `${stubDir}:${realPath ?? ""}`;
   process.env.STUB_LOG = logFile;
-  process.env.GH_REPO = "chizhangucb/chronicle";
 
   stub("gh", [
     'case "$*" in',
@@ -100,8 +100,6 @@ before(() => {
 
 after(() => {
   process.env.PATH = realPath;
-  if (savedRepo === undefined) delete process.env.GH_REPO;
-  else process.env.GH_REPO = savedRepo;
   delete process.env.STUB_LOG;
   delete process.env.NO_THREADS;
   delete process.env.NO_MERGE_BASE;
@@ -115,20 +113,16 @@ beforeEach(() => {
 });
 
 test("the PR read asks for the title, body and comments the context is built from", () => {
-  const pr = prContextRepo().pr("12");
+  const pr = prContextRepo(REPO).pr("12");
   assert.equal(pr.title, "Add a helper");
   assert.equal(pr.body, "Closes #4");
   assert.deepEqual(pr.comments.map((comment) => comment.authorAssociation), ["OWNER"]);
   assert.deepEqual(asked(), ["gh pr view 12 --json title,body,comments"]);
 });
 
-/**
- * Two reads, because neither carries the other's half (#179): the `--json` view
- * has the criteria, the comments and the labels #10's rule is written on, and
- * REST has the `author_association` the `ticket-author` channel is judged on.
- */
+/** Both halves of the ticket, from the two reads that each carry one (#179). */
 test("the ticket read brings back its labels and, from REST, whoever opened it", () => {
-  const read = prContextRepo().linkedIssue("4");
+  const read = prContextRepo(REPO).linkedIssue("4");
   assert.equal(read.view.body, ISSUE_VIEW.body);
   assert.deepEqual(read.view.labels, [{ name: "model:claude-sonnet-5" }]);
   assert.deepEqual(read.author, { association: "OWNER", login: "chi" });
@@ -139,33 +133,30 @@ test("the ticket read brings back its labels and, from REST, whoever opened it",
 });
 
 test("the reviews read is the REST list of submitted reviews on the PR", () => {
-  const reviews = prContextRepo().reviews("12");
+  const reviews = prContextRepo(REPO).reviews("12");
   assert.deepEqual(reviews.map((review) => review.author_association), ["OWNER"]);
   assert.deepEqual(asked(), ["gh api repos/{owner}/{repo}/pulls/12/reviews"]);
 });
 
-/**
- * GraphQL rather than REST: a thread's id and its resolved state are GraphQL's
- * alone, and a reply needs the thread it lands on. The owner and repo come from
- * `GH_REPO`, the workflow's own.
- */
-test("the review threads come out of the one GraphQL answer, for the repo GH_REPO names", () => {
-  const threads = prContextRepo().reviewThreads("12");
+/** The threads, and the target they are asked for: the record's own, not an env read of its own. */
+test("the review threads come out of the one GraphQL answer, for the target the record was built for", () => {
+  const threads = prContextRepo(REPO).reviewThreads("12");
   assert.deepEqual(threads.map((thread) => thread.id), ["T1"]);
   assert.deepEqual(threads[0]?.comments.nodes.map((comment) => comment.id), ["C1"]);
+  const [owner, repo] = REPO.split("/");
   const graphql = asked()[0] ?? "";
-  assert.match(graphql, /owner=chizhangucb/);
-  assert.match(graphql, /repo=chronicle/);
+  assert.match(graphql, new RegExp(`owner=${owner}`));
+  assert.match(graphql, new RegExp(`repo=${repo}`));
   assert.match(graphql, /number=12/);
 });
 
 test("a PR with no review threads reads as none rather than as a failure", () => {
   process.env.NO_THREADS = "1";
-  assert.deepEqual(prContextRepo().reviewThreads("12"), []);
+  assert.deepEqual(prContextRepo(REPO).reviewThreads("12"), []);
 });
 
 test("the diff read is the branch against the base, three dots first", () => {
-  assert.equal(prContextRepo().diff(), "three-dot diff");
+  assert.equal(prContextRepo(REPO).diff(), "three-dot diff");
   assert.deepEqual(asked(), ["git diff main...HEAD"]);
 });
 
@@ -176,6 +167,6 @@ test("the diff read is the branch against the base, three dots first", () => {
  */
 test("a three-dot diff that cannot resolve a merge base falls back to two dots", () => {
   process.env.NO_MERGE_BASE = "1";
-  assert.equal(prContextRepo().diff(), "two-dot diff");
+  assert.equal(prContextRepo(REPO).diff(), "two-dot diff");
   assert.deepEqual(asked(), ["git diff main...HEAD", "git diff main..HEAD"]);
 });
