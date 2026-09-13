@@ -93,7 +93,6 @@ export type Deadlines = {
 
 export const DEFAULT_DEADLINES: Deadlines = { stuckMinutes: 30, verdictMinutes: 30, updateMinutes: 30 };
 
-export { ESCALATION_LABEL };
 export const UPDATE_BRANCH_EVENT = "factory-update-branch";
 export const SWEEP_MARK = /^<!-- factory:sweep miss=(\d+)(?: tries=(\d+))? -->/;
 /**

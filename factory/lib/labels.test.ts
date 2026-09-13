@@ -4,7 +4,6 @@
  */
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
-import * as path from "node:path";
 import { test } from "node:test";
 
 import {
@@ -20,39 +19,45 @@ import {
   READY_LABEL,
   REVIEW_LABEL,
 } from "./labels.ts";
+import { codeOf, factoryModules, importedFrom } from "./repo-files.ts";
 
-/**
- * A module's source with its comments taken out. Prose may name a label, since
- * a comment explaining a transition has to spell the label it is about; code
- * may not, because a spelling in code is a second home the first cannot reach.
- */
-const codeOf = (file: string): string =>
-  fs
-    .readFileSync(new URL(`../../${file}`, import.meta.url), "utf8")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "");
-
-test("`agent:review` is spelled once, in REVIEW_LABEL, and every module that writes it reads it from there", () => {
+test("REVIEW_LABEL is the string a target's caller wakes the reviewer on", () => {
   // It was the one label with no constant: the reconciler re-added it, the
   // target repo read it as a PR's state label, and HANDED_OFF_LABELS listed
   // it, each from its own literal, so renaming it anywhere renamed it nowhere
   // else and the reviewer would be started by a label nothing else recognised.
-  assert.equal(REVIEW_LABEL, "agent:review");
+  // The caller is what settles the spelling, not this module: a target's
+  // `review` job runs on the label GitHub reports, so renaming the constant
+  // without renaming the clause leaves the factory adding a label no workflow
+  // listens for. Same tie, same reason as the label prefixes (#170).
+  const caller = fs.readFileSync(new URL("../../templates/factory.yml", import.meta.url), "utf8");
+  assert.ok(
+    caller.includes(`github.event.label.name == '${REVIEW_LABEL}'`),
+    "templates/factory.yml starts its review job on REVIEW_LABEL",
+  );
   assert.ok(HANDED_OFF_LABELS.includes(REVIEW_LABEL), "a PR carrying it is handed off to the reviewer");
 });
 
 /**
- * The modules that decide on a label: they read one off a subject or write one
- * onto it, and each of them can import this one (the dispatch and update-branch
- * cones both carry `lib/labels.ts`, so reaching it costs nothing at runtime).
- * Prose elsewhere, the retry handler's comment bodies above all, spells labels
- * at a human and is not a decision.
+ * Any label this module names, as a module that had not imported it would
+ * spell it: the `agent:*` states, the escalation, and the human's intent.
  */
-const LABEL_READERS = [
-  "factory/dispatch/reconcile.ts",
-  "factory/dispatch/select.ts",
-  "factory/heartbeat/work.ts",
-  "factory/lib/target-repo.ts",
+const ANY_LABEL = /agent:[a-z-]+|needs-human|ready-for-agent/;
+
+/**
+ * The modules that still write a label into a sentence meant for a person: a
+ * comment the factory posts, a plan's reason, a sweep's note on an escalation.
+ * None of them decides anything on those strings, and each already imports the
+ * constant it decides on. Named rather than skipped, as
+ * `strip-types-cone.test.ts` names its cone-less jobs: a module that stops
+ * spelling one has to come off this list, so the exception cannot outlive the
+ * sentence that earned it.
+ */
+const SPELLS_A_LABEL_AT_A_PERSON = [
+  "factory/audit/report.ts",
+  "factory/dispatch/sweep.ts",
+  "factory/retry/decide.ts",
+  "factory/update-branch/plan.ts",
 ];
 
 test("this module imports nothing, so both bare-node cones can reach it", () => {
@@ -65,36 +70,30 @@ test("this module imports nothing, so both bare-node cones can reach it", () => 
   assert.doesNotMatch(source, /^\s*(import|export)\b[^\n]*\bfrom\b/m, "lib/labels.ts imports nothing");
 });
 
-test("no module that decides on a label spells one: every label read or written comes from here", () => {
-  // The whole point of the module (#311). A literal in one of these is a
-  // second home: renaming the label here would leave that module deciding on
-  // the old string, and nothing but a passing test suite would say so.
-  for (const file of LABEL_READERS) {
-    assert.doesNotMatch(
-      codeOf(file),
-      /agent:[a-z-]+|needs-human|ready-for-agent/,
-      `${file} spells a label in code instead of importing it from lib/labels.ts`,
-    );
-  }
+test("no module decides on a label it spells itself: every label read or written comes from here", () => {
+  // The whole point of the module (#311). A literal anywhere else is a second
+  // home: renaming the label here would leave that module deciding on the old
+  // string, and nothing but a passing test suite would say so. The whole tree
+  // rather than a list of readers, so a module that starts deciding on a label
+  // of its own is caught the first time it does.
+  const spelling = factoryModules({ tests: false })
+    .filter((module) => module !== "factory/lib/labels.ts")
+    .filter((module) => ANY_LABEL.test(codeOf(module)))
+    .sort();
+  assert.deepEqual(spelling, SPELLS_A_LABEL_AT_A_PERSON);
 });
 
-/** Every module in the tree, tests included: the readers a label set can be imported from the wrong home by. */
-const modules = (dir = "factory"): string[] =>
-  fs.readdirSync(new URL(`../../${dir}`, import.meta.url), { withFileTypes: true }).flatMap((entry) =>
-    entry.isDirectory() ? modules(`${dir}/${entry.name}`) : entry.name.endsWith(".ts") ? [`${dir}/${entry.name}`] : [],
-  );
-
 /**
- * Where each `import { ... NAME ... } from "x"` in the tree reads that name
- * from, as a repo-relative path, so a sibling's `./labels.ts` and a
- * neighbour's `../lib/labels.ts` are the one home they name.
+ * Every module that imports `name`, and the module it reads it from, both
+ * repo-relative, so a sibling's `./labels.ts` and a neighbour's
+ * `../lib/labels.ts` are the one home they name. Tests included: a test
+ * importing a set from its old home is the drift the move is meant to end.
  */
 const importersOf = (name: string): { file: string; from: string }[] =>
-  modules().flatMap((file) =>
-    [...fs.readFileSync(new URL(`../../${file}`, import.meta.url), "utf8").matchAll(/import\s*\{([^}]*)\}\s*from\s*"([^"]+)"/g)]
-      .filter((match) => match[1]!.split(",").some((binding) => binding.trim().replace(/^type\s+/, "") === name))
-      .map((match) => ({ file, from: path.posix.join(path.posix.dirname(file), match[2]!) })),
-  );
+  factoryModules({ tests: true }).flatMap((file) => {
+    const from = importedFrom(file, name);
+    return from === undefined ? [] : [{ file, from }];
+  });
 
 test("PARKED_LABELS is the label module's, read from there by the reconciler and everyone else", () => {
   // It was the reconciler's own, and the heartbeat imported it from there, so
@@ -157,10 +156,10 @@ const OLD_HOMES = /(?:[\w/.-]*)(?:reconcile|select)\.ts/g;
 test("no page sends a reader to a moved label set's old home", () => {
   // `PARKED_LABELS` was the reconciler's and `DISPATCH_LABEL` the dispatcher's,
   // and prose held the sets together where the code could not: CONTEXT.md and
-  // update-branch both sent a reader to `dispatch/reconcile.ts` for the parked
-  // pair, and this module's own header called `dispatch/select.ts` the home of
+  // update-branch both sent a reader to the reconciler for the parked pair,
+  // and this module's own header called the dispatcher's selector the home of
   // the other two. A reader following that prose after the move finds nothing.
-  for (const page of [...docPages(), ...modules().filter((file) => !file.endsWith(".test.ts"))]) {
+  for (const page of [...docPages(), ...factoryModules({ tests: true })]) {
     const prose = proseOf(page);
     for (const name of MOVED_SETS) {
       for (const match of prose.matchAll(new RegExp(name, "g"))) {
