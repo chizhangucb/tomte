@@ -9,7 +9,7 @@
  * waiting and when each subject last changed, which is what is due (#264), and
  * the variables read says whether it is paused (#256) and whether
  * its checks are waived (#244). `DRY_RUN=1` reports the pass without touching
- * a target at all, as `dispatch/sweep.ts` reads the same var: no dispatch, and
+ * a target at all, as `dispatch/sweep-run.ts` reads the same var: no dispatch, and
  * no read either, so every target answers as a running one with work and the
  * pass reports the shape a busy interval takes.
  *

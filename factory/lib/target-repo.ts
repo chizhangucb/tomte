@@ -1,9 +1,7 @@
 /**
  * Target repo (#281): the GitHub-backed reads and writes the factory's scripts
- * make against a target, written once here. A script declares what it needs as
- * a record of named functions (the sweep's `Needs`, the shape of the
- * heartbeat's `Pass`) and its entry point assembles that record from this
- * module; in a test the record is an in-memory target repo instead.
+ * make against a target, written once here and handed to a script as its needs
+ * record. docs/pipeline.md, "How a script is wired", carries the pattern.
  *
  * The key choice lives here, not in any script: reads a fine-grained PAT cannot
  * make (Actions runs and jobs, commit statuses) use `READ_TOKEN`, falling back

@@ -2,13 +2,11 @@
  * Sweep (#35): build the reconciler's snapshot from the target repo, decide
  * with `reconcile.ts`, apply the repairs, log one line per decision.
  *
- * Built the way the heartbeat is (#281): it declares the reads and writes it
- * needs from the target repo as a `Needs` record, the shape of the heartbeat's
- * `Pass`, and is handed them from outside. In production `sweep-run.ts`
- * assembles the record from `lib/target-repo.ts`, which holds the
- * GitHub-backed versions and picks the reading or writing key itself; in
- * `sweep.test.ts` the record is an in-memory target repo. What the sweep
- * decides does not change, only how it is wired: no `gh` call lives here now.
+ * Built the way the heartbeat is (#281): it takes a `Needs` record, the shape
+ * of the heartbeat's `Pass`, and is handed it from outside (`sweep-run.ts` in
+ * production, an in-memory target repo in `sweep.test.ts`). What it decides
+ * does not change, only how it is wired: no `gh` call lives here now.
+ * docs/pipeline.md, "How a script is wired", carries the pattern.
  *
  * A failed hard read aborts the pass with one `::error::` line and repairs
  * nothing from a partial snapshot. Which reads may fail softly is still this
