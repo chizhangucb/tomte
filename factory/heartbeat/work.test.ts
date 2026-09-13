@@ -285,9 +285,9 @@ test("the daily recheck wakes a held pull request but never a held ticket, a par
 });
 
 test("the deadlines are the reconciler's own, restated nowhere here", () => {
-  // The tie `PARKED_LABELS` already travels, for the same reason: a heartbeat
-  // carrying its own copy of a deadline would agree with itself forever while
-  // the reconciler moved.
+  // The tie `PARKED_LABELS` already travels from `factory/lib/labels.ts`, for
+  // the same reason: a heartbeat carrying its own copy of a deadline would
+  // agree with itself forever while the reconciler moved.
   const source = fs.readFileSync(new URL("./work.ts", import.meta.url), "utf8");
   for (const [name, value] of Object.entries(DEFAULT_DEADLINES)) {
     assert.doesNotMatch(source, new RegExp(`\\b${value}\\b`), `${name} is ${value}, which is written out in work.ts rather than imported`);

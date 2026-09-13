@@ -21,20 +21,31 @@ import {
 } from "./labels.ts";
 import { codeOf, factoryModules, importedFrom } from "./repo-files.ts";
 
-test("REVIEW_LABEL is the string a target's caller wakes the reviewer on", () => {
-  // It was the one label with no constant: the reconciler re-added it, the
-  // target repo read it as a PR's state label, and HANDED_OFF_LABELS listed
-  // it, each from its own literal, so renaming it anywhere renamed it nowhere
-  // else and the reviewer would be started by a label nothing else recognised.
-  // The caller is what settles the spelling, not this module: a target's
-  // `review` job runs on the label GitHub reports, so renaming the constant
+test("the labels a target's caller wakes a job on are these constants", () => {
+  // `agent:review` was the one label with no constant: the reconciler re-added
+  // it, the target repo read it as a PR's state label, and HANDED_OFF_LABELS
+  // listed it, each from its own literal, so renaming it anywhere renamed it
+  // nowhere else and the reviewer would be started by a label nothing else
+  // recognised.
+  // The caller is what settles every one of these spellings, not this module: a
+  // target's job runs on the label GitHub reports, so renaming a constant
   // without renaming the clause leaves the factory adding a label no workflow
-  // listens for. Same tie, same reason as the label prefixes (#170).
+  // listens for. All three clauses, not just the reviewer's: `DISPATCH_LABEL`
+  // claims the label a ticket is dispatched with is the label the workflow that
+  // starts on it listens for, and nothing else pins that claim. Same tie, same
+  // reason as the label prefixes (#170).
   const caller = fs.readFileSync(new URL("../../templates/factory.yml", import.meta.url), "utf8");
-  assert.ok(
-    caller.includes(`github.event.label.name == '${REVIEW_LABEL}'`),
-    "templates/factory.yml starts its review job on REVIEW_LABEL",
-  );
+  const wakesOn: readonly [string, string][] = [
+    [REVIEW_LABEL, "the review job"],
+    [DISPATCH_LABEL, "the implement jobs"],
+    [READY_LABEL, "the dispatcher"],
+  ];
+  for (const [label, job] of wakesOn) {
+    assert.ok(
+      caller.includes(`github.event.label.name == '${label}'`),
+      `templates/factory.yml starts ${job} on ${label}`,
+    );
+  }
   assert.ok(HANDED_OFF_LABELS.includes(REVIEW_LABEL), "a PR carrying it is handed off to the reviewer");
 });
 
