@@ -2,420 +2,317 @@
  * Sweep (#35): build the reconciler's snapshot from the target repo, decide
  * with `reconcile.ts`, apply the repairs, log one line per decision.
  *
- * Runs after the dispatcher on workflow_dispatch and on the `factory-sweep`
- * repository_dispatch (the heartbeat, sent from outside GitHub on the
- * heartbeat's interval, which is the only thing that sweeps on an interval
- * since the caller's cron was removed in #270). Reads that a fine-grained PAT cannot make
- * (Actions runs and jobs, commit statuses) use READ_TOKEN; every write uses
- * GH_TOKEN so the labels fire their events.
+ * Built the way the heartbeat is (#281): it takes a `Needs` record, the shape
+ * of the heartbeat's `Pass`, and is handed it from outside (`sweep-run.ts` in
+ * production, an in-memory target repo in `sweep.test.ts`). What it decides
+ * does not change, only how it is wired: no `gh` call lives here now.
+ * docs/pipeline.md, "How a script is wired", carries the pattern.
  *
- * Env: GH_REPO (owner/repo), GH_TOKEN (FACTORY_PAT), READ_TOKEN
- * (GITHUB_TOKEN; defaults to GH_TOKEN), optional BASE_BRANCH (main),
- * STUCK_MINUTES, VERDICT_MINUTES, UPDATE_MINUTES (see DEFAULT_DEADLINES),
- * TRUSTED_AUTHOR_ASSOCIATIONS (default OWNER, the same input the dispatcher
- * and the reviewer take), RUN_URL, OUTPUT_DIR for sweep.json, DRY_RUN=1 to
- * decide without writing.
+ * A failed hard read aborts the pass with one `::error::` line and repairs
+ * nothing from a partial snapshot. Which reads may fail softly is still this
+ * script's own policy and stays here: a ticket's author (#182), a run's jobs,
+ * a PR's comments and the factory's own login (#230). Each of those the module
+ * throws `GhError` for, and each the sweep catches, warns about, and leaves the
+ * subject alone for, since an unknown fact is one the reconciler does less on.
  *
- * Every list read (issues, timelines, comments, runs, jobs) is `gh api --paginate`
- * with a `--jq` projection to the fields the reconciler maps
- * (`gh-read.ts`): a full run payload is 10 KB and a page of them
- * overflowed the spawn buffer on the fixture. A failed read aborts the
- * sweep with one `::error::` line naming the command and the cause,
- * nothing is repaired from a partial snapshot. Two exceptions, each a read
- * whose failure can only make the reconciler do less: a run's jobs, where a
- * failure leaves the run's role unknown (it then counts as covering while
- * live), and the author of a ticket closed by a PR that is not a factory PR,
- * where a failure leaves the author unknown and the PR alone (#182). A third
- * since #230: the comments on a PR that closes no ticket, where a failure
- * leaves it unknown whether the factory has spoken already and the sweep says
- * nothing rather than risk repeating itself, and the same for the read of the
- * account it writes as, which is what tells its own marker from a forged one.
- *
- * Builtins only, imported with `.ts` extensions, so the job runs on bare
- * `node --experimental-strip-types` and skips installing the engine.
+ * Builtins only, imported with `.ts` extensions, so the dispatch job runs it on
+ * bare `node --experimental-strip-types` and skips installing the engine.
  */
-import * as fs from "node:fs";
-import * as path from "node:path";
-
 import { errorMessage } from "../lib/errors.ts";
-import { GhError, gh } from "../lib/gh.ts";
-import { type Author, trustPolicyFromEnv } from "../lib/trusted-authors.ts";
+import { GhError } from "../lib/gh.ts";
+import { type Author, type TrustPolicy } from "../lib/trusted-authors.ts";
 import { escalationLabels } from "../retry/escalation.ts";
-import { PROJECTIONS, type Projection, STATUSES_PROJECTION, parseItems } from "./gh-read.ts";
 import {
-  DEFAULT_DEADLINES,
   type Deadlines,
   type Decision,
+  type PrComment,
   type PrState,
   type Run,
   type Snapshot,
+  type Subject,
   type TicketState,
   type VerdictState,
-  commentFromGitHub,
   leftAlone,
   leftAloneFromListing,
-  marksFromTimeline,
   onMergePath,
-  prFromGitHub,
   reconcile,
   roleFromJobs,
-  runFromGitHub,
   runsFor,
-  stateSinceFromTimeline,
-  ticketFromGitHub,
   toldNoTicketIn,
   whyLeftAlone,
 } from "./reconcile.ts";
 
-const repo = process.env.GH_REPO;
-if (!repo) {
-  console.error("Missing required env var: GH_REPO");
-  process.exit(1);
-}
-const base = process.env.BASE_BRANCH || "main";
-const dryRun = process.env.DRY_RUN === "1";
-const runUrl = process.env.RUN_URL;
-const readEnv = { ...process.env, GH_TOKEN: process.env.READ_TOKEN || process.env.GH_TOKEN };
-// Built once here and passed down as a required argument, as the dispatcher
-// builds its own, so the reconciler has no policy of its own to fall back to
-// (#52). It judges who opened the ticket a PR that is not a factory PR
-// closes, on the channel the reviewer judges that ticket on (#179, #182).
-const policy = trustPolicyFromEnv();
+/** A run's jobs, as much of each as `roleFromJobs` reads. */
+export type JobSummary = { name: string; conclusion: string | null };
+
+/** A PR as `openPrs` hands it out: its label state resolved, its merge state (verdict, head, ...) still unread. */
+export type OpenPr = { pr: PrState; createdAt: string };
 
 /**
- * A read whose command answered with something other than JSON is a failure of
- * that command, so it is thrown in the same shape `gh` itself throws (`GhError`
- * in `lib/gh.ts`): the command and the cause, no stack, no token.
+ * Everything the sweep needs from the target repo, the shape of the
+ * heartbeat's `Pass`: named domain reads and writes, never a raw `gh` call.
+ * Every function throws `GhError` on failure; the sweep decides which throws it
+ * shrugs off and which abort the pass.
  */
-const ghJson = (args: string[], env?: NodeJS.ProcessEnv): any => {
-  const out = gh(args, env);
-  try {
-    return JSON.parse(out);
-  } catch {
-    throw new GhError(args, new Error(`printed something other than JSON: ${out.slice(0, 200)}`));
-  }
-};
-/** All pages of `endpoint`, each projected by gh to the fields the reconciler maps, one item per line. */
-const paginate = (endpoint: string, projection: Projection, env?: NodeJS.ProcessEnv): any[] => {
-  const args = ["api", "--paginate", endpoint, "--jq", PROJECTIONS[projection]];
-  try {
-    return parseItems(gh(args, env));
-  } catch (error) {
-    if (error instanceof GhError) throw error;
-    throw new GhError(args, error);
-  }
-};
-
-const minutesInput = (name: string, fallback: number): number => {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") return fallback;
-  const n = Number(raw);
-  if (Number.isInteger(n) && n > 0) return n;
-  console.log(`::warning::${name} must be a positive integer, got '${raw}'; using ${fallback}.`);
-  return fallback;
-};
-
-const deadlines: Deadlines = {
-  stuckMinutes: minutesInput("STUCK_MINUTES", DEFAULT_DEADLINES.stuckMinutes),
-  verdictMinutes: minutesInput("VERDICT_MINUTES", DEFAULT_DEADLINES.verdictMinutes),
-  updateMinutes: minutesInput("UPDATE_MINUTES", DEFAULT_DEADLINES.updateMinutes),
+export type Needs = {
+  /** Open tickets with their label state (the state label's `since` and the sweep marks). */
+  readonly openTickets: () => TicketState[];
+  /** Open pull requests on the base with their label state; merge state is read per PR below. */
+  readonly openPrs: () => OpenPr[];
+  /** Runs completed within the lookback or still live; their roles are read from their jobs. */
+  readonly recentRuns: (since: string) => Run[];
+  /** One run's jobs, for its role. A read the sweep lets fail softly (the run then counts as covering while live). */
+  readonly jobs: (runId: number) => JobSummary[];
+  /** The `factory/verdict` on a head. */
+  readonly verdict: (sha: string) => VerdictState;
+  /** When a head commit was committed, for how long its PR has carried it. */
+  readonly commitDate: (sha: string) => string;
+  /** How many commits on the base a head lacks. */
+  readonly behindBy: (sha: string) => number;
+  /** Whoever opened a ticket. A read the sweep lets fail softly (an unread author leaves the PR alone). */
+  readonly ticketAuthor: (ticket: number) => Author;
+  /** A PR's own comments, for #230's marker. A read the sweep lets fail softly (it then says nothing). */
+  readonly prComments: (pr: number) => PrComment[];
+  /** The account the sweep writes as, whose #230 marker is its own. A read the sweep lets fail softly. */
+  readonly factoryLogin: () => string;
+  /** A subject's labels right now, read at apply time because the snapshot may be stale by then. */
+  readonly currentLabels: (subject: number) => string[];
+  readonly addLabel: (subject: Subject, label: string) => void;
+  readonly removeLabel: (subject: Subject, label: string) => void;
+  readonly comment: (subject: Subject, body: string) => void;
+  readonly dispatch: (eventType: string, pr: number) => void;
+  readonly armAutoMerge: (pr: number) => void;
 };
 
-const now = new Date();
-
-/* Snapshot: issues and PRs with their label times and sweep marks. */
-
-const timeline = (number: number): any[] => paginate(`repos/${repo}/issues/${number}/timeline?per_page=100`, "timeline");
-
-const withLabelState = <T extends TicketState | PrState>(subject: T, stateLabels: readonly string[]): T => {
-  const state = stateLabels.find((l) => subject.labels.includes(l));
-  if (!state || leftAlone(subject.labels)) return subject;
-  const events = timeline(subject.number);
-  return { ...subject, stateSince: stateSinceFromTimeline(events, state), marks: marksFromTimeline(events) };
+/** What one pass is measured and decided against. `now` is injected so a test drives the clock. */
+export type SweepConfig = {
+  readonly repo: string;
+  readonly base: string;
+  readonly deadlines: Deadlines;
+  readonly policy: TrustPolicy;
+  readonly now: Date;
+  readonly dryRun: boolean;
+  readonly runUrl?: string;
 };
 
-const readIssues = (): TicketState[] =>
-  paginate(`repos/${repo}/issues?state=open&per_page=100`, "issues")
-    .filter((raw: any) => !raw.pull_request)
-    .map(ticketFromGitHub)
-    .map((t) => withLabelState(t, ["agent:in-progress", "agent:implement"]));
-
-const verdictOn = (sha: string): VerdictState => {
-  const statuses: { context: string; state: string }[] = ghJson(["api", `repos/${repo}/commits/${sha}/status`, "--jq", STATUSES_PROJECTION], readEnv);
-  const state = statuses.find((s) => s.context === "factory/verdict")?.state;
-  return state === "pending" || state === "success" || state === "failure" || state === "error" ? state : "none";
+export type SweepResult = {
+  /** Set when a hard read failed: the snapshot was partial, so nothing was repaired. */
+  readonly aborted?: string;
+  readonly snapshot?: Snapshot;
+  readonly decisions: readonly Decision[];
+  readonly applied: readonly string[];
+  /** Re-arms GitHub refused: warned, not failed, but recorded so a standing refusal is visible. */
+  readonly refused: readonly { log: string; error: string }[];
+  readonly failed: readonly { log: string; error: string }[];
 };
 
 const later = (a: string, b: string): string => (Date.parse(a) >= Date.parse(b) ? a : b);
 
-/** When the PR's current head appeared: the later of the PR's creation and its head commit. */
-const headSince = (pr: PrState, createdAt: string): string => {
-  const committed = gh(["api", `repos/${repo}/commits/${pr.headSha}`, "--jq", ".commit.committer.date"]).trim();
-  return later(createdAt, committed || createdAt);
-};
+/** One pass of the sweep against a target repo: read, decide, apply, log. */
+export const sweep = (needs: Needs, config: SweepConfig): SweepResult => {
+  const { repo, base, deadlines, policy, now, dryRun, runUrl } = config;
 
-/**
- * Whoever opened a ticket, as `review-context.ts` reads it for the reviewer
- * (#179): REST, because `gh issue view --json` carries no
- * `author_association`, and that is the field the `ticket-author` channel is
- * judged on. A failed read leaves the author unknown rather than aborting:
- * one PR closing a mistyped number would otherwise stop every repair on the
- * target every sweep, and an unknown author is one the reconciler leaves the
- * PR alone for, which is the safe direction to be wrong in.
- *
- * A copy of `readLinkedIssue`'s REST half rather than a call into it:
- * `review-context.ts` imports extensionless tsx modules, and this job runs on
- * bare `node --experimental-strip-types`. The read is copied; the judgement
- * is not, since the policy decides in `reconcile.ts` exactly as it decides
- * there.
- */
-const ticketAuthorOf = (ticket: number): Author | undefined => {
-  try {
-    const raw = ghJson(["api", `repos/${repo}/issues/${ticket}`, "--jq", "{association: .author_association, login: .user.login}"]);
-    return { association: raw.association, login: raw.login };
-  } catch (error) {
-    if (!(error instanceof GhError)) throw error;
-    console.log(`::warning::Could not read who opened #${ticket}; leaving the PRs that close it alone: ${error.message}`);
-    return undefined;
-  }
-};
+  /** When the PR's current head appeared: the later of the PR's creation and its head commit. */
+  const headSince = (pr: PrState, createdAt: string): string => {
+    const committed = needs.commitDate(pr.headSha).trim();
+    return later(createdAt, committed || createdAt);
+  };
 
-/**
- * The account GH_TOKEN belongs to, which is the account this sweep comments
- * under and so the only one whose #230 marker means the factory has spoken.
- * Read once per sweep, and only if a PR needs it. Unknown on a failed read,
- * which leaves the factory unable to recognise its own comment and therefore
- * silent, as `toldNoTicketIn` says.
- */
-let login: { known: string | undefined } | undefined;
-const factoryLogin = (): string | undefined => {
-  if (login) return login.known;
-  try {
-    login = { known: gh(["api", "user", "--jq", ".login"]).trim() || undefined };
-  } catch (error) {
-    if (!(error instanceof GhError)) throw error;
-    console.log(`::warning::Could not read the account this sweep writes as; saying nothing about a PR's missing closing keyword: ${error.message}`);
-    login = { known: undefined };
-  }
-  return login.known;
-};
+  /**
+   * Whoever opened the ticket a PR that is not a factory PR closes (#179, #182).
+   * A failed read leaves the author unknown rather than aborting: one PR closing
+   * a mistyped number would otherwise stop every repair on the target, and an
+   * unknown author is one the reconciler leaves the PR alone for.
+   */
+  const ticketAuthorOf = (ticket: number): Author | undefined => {
+    try {
+      return needs.ticketAuthor(ticket);
+    } catch (error) {
+      if (!(error instanceof GhError)) throw error;
+      console.log(`::warning::Could not read who opened #${ticket}; leaving the PRs that close it alone: ${error.message}`);
+      return undefined;
+    }
+  };
 
-/**
- * Whether the factory has already told this PR it closes no ticket (#230).
- * Its own comments, with their authors, since a marker suppresses the next
- * comment only when the trust policy acts on whoever wrote it: `reconcile.ts`
- * makes that judgement, as it makes every other. A failed read leaves the
- * answer unknown rather than aborting, and unknown means told, so the sweep
- * stays quiet rather than repeating itself on a PR whose comments it could
- * not see.
- */
-const toldNoTicketOn = (pr: number): boolean | undefined => {
-  try {
-    return toldNoTicketIn(paginate(`repos/${repo}/issues/${pr}/comments?per_page=100`, "comments").map(commentFromGitHub), factoryLogin());
-  } catch (error) {
-    if (!(error instanceof GhError)) throw error;
-    console.log(`::warning::Could not read the comments on PR #${pr}; saying nothing about its missing closing keyword: ${error.message}`);
-    return undefined;
-  }
-};
+  /**
+   * The account the write token belongs to, which is the only one whose #230
+   * marker means the factory has spoken. Read once per pass, and only if a PR
+   * needs it. Unknown on a failed read, which leaves the factory unable to
+   * recognise its own comment and therefore silent, as `toldNoTicketIn` says.
+   */
+  let login: { known: string | undefined } | undefined;
+  const factoryLogin = (): string | undefined => {
+    if (login) return login.known;
+    try {
+      login = { known: needs.factoryLogin().trim() || undefined };
+    } catch (error) {
+      if (!(error instanceof GhError)) throw error;
+      console.log(`::warning::Could not read the account this sweep writes as; saying nothing about a PR's missing closing keyword: ${error.message}`);
+      login = { known: undefined };
+    }
+    return login.known;
+  };
 
-/**
- * A PR that is not a factory PR (#182): who opened its ticket, and the
- * verdict on its head, read only past the reasons to leave it alone that the
- * listing already answers, which `leftAloneFromListing` decides for the
- * reconciler too. Auto-merge is not asked about: the reconciler asks for a
- * verdict on such a PR armed or not, and that decision never arms it.
- */
-const withUnjudgedState = (pr: PrState, createdAt: string): PrState => {
-  if (leftAlone(pr.labels)) return pr;
-  const listed = leftAloneFromListing(pr);
-  // The one left-alone reason the sweep speaks about, so the one whose PR needs
-  // a comment read. The other two the listing answers need no read at all.
-  if (listed) return listed.reason === "no-ticket" ? { ...pr, toldNoTicket: toldNoTicketOn(pr.number) } : pr;
-  if (pr.closes === undefined) return pr;
-  const ticketAuthor = ticketAuthorOf(pr.closes);
-  // A PR its ticket's author leaves alone needs no verdict or head read, and a
-  // failure of either would abort the sweep over a PR it was never going to touch.
-  if (whyLeftAlone({ ...pr, ticketAuthor }, policy)) return { ...pr, ticketAuthor };
-  const verdict = verdictOn(pr.headSha);
-  if (verdict !== "none") return { ...pr, ticketAuthor, verdict };
-  return { ...pr, ticketAuthor, verdict, headSince: headSince(pr, createdAt) };
-};
+  /**
+   * Whether the factory has already told this PR it closes no ticket (#230).
+   * A failed read leaves the answer unknown rather than aborting, and unknown
+   * means told, so the sweep stays quiet rather than repeating itself on a PR
+   * whose comments it could not see.
+   */
+  const toldNoTicketOn = (pr: number): boolean | undefined => {
+    try {
+      return toldNoTicketIn(needs.prComments(pr), factoryLogin());
+    } catch (error) {
+      if (!(error instanceof GhError)) throw error;
+      console.log(`::warning::Could not read the comments on PR #${pr}; saying nothing about its missing closing keyword: ${error.message}`);
+      return undefined;
+    }
+  };
 
-const withMergeState = (pr: PrState, createdAt: string): PrState => {
-  if (!onMergePath(pr.labels)) return pr;
-  if (!pr.factory) return withUnjudgedState(pr, createdAt);
-  // No auto-merge: the reconciler re-arms it against the same deadline (#83), and no
-  // verdict can change that, so the verdict is not worth a read here.
-  if (!pr.autoMerge) return { ...pr, headSince: headSince(pr, createdAt) };
-  const verdict = verdictOn(pr.headSha);
-  if (verdict === "none") return { ...pr, verdict, headSince: headSince(pr, createdAt) };
-  if (verdict !== "success") return { ...pr, verdict };
-  const behindBy = Number(gh(["api", `repos/${repo}/compare/${base}...${pr.headSha}`, "--jq", ".behind_by"]).trim());
-  return { ...pr, verdict, behindBy };
-};
+  /**
+   * A PR that is not a factory PR (#182): who opened its ticket, and the verdict
+   * on its head, read only past the reasons to leave it alone that the listing
+   * already answers. Auto-merge is not asked about; the reconciler asks for a
+   * verdict on such a PR armed or not, and that decision never arms it.
+   */
+  const withUnjudgedState = (pr: PrState, createdAt: string): PrState => {
+    if (leftAlone(pr.labels)) return pr;
+    const listed = leftAloneFromListing(pr);
+    if (listed) return listed.reason === "no-ticket" ? { ...pr, toldNoTicket: toldNoTicketOn(pr.number) } : pr;
+    if (pr.closes === undefined) return pr;
+    const ticketAuthor = ticketAuthorOf(pr.closes);
+    if (whyLeftAlone({ ...pr, ticketAuthor }, policy)) return { ...pr, ticketAuthor };
+    const verdict = needs.verdict(pr.headSha);
+    if (verdict !== "none") return { ...pr, ticketAuthor, verdict };
+    return { ...pr, ticketAuthor, verdict, headSince: headSince(pr, createdAt) };
+  };
 
-/** `gh pr list --json` is its own projection; 200 PRs with bodies fit the buffer with room. */
-const readPrs = (): PrState[] => {
-  const rawPrs: any[] = ghJson([
-    "pr", "list", "--repo", repo, "--state", "open", "--base", base, "--limit", "200",
-    "--json", "number,title,headRefName,headRefOid,labels,autoMergeRequest,body,createdAt,isDraft,isCrossRepository",
-  ]);
-  return rawPrs.map((raw) =>
-    withMergeState(withLabelState(prFromGitHub(raw), ["agent:in-progress", "agent:review", "agent:implement"]), raw.createdAt),
-  );
-};
+  const withMergeState = ({ pr, createdAt }: OpenPr): PrState => {
+    if (!onMergePath(pr.labels)) return pr;
+    if (!pr.factory) return withUnjudgedState(pr, createdAt);
+    if (!pr.autoMerge) return { ...pr, headSince: headSince(pr, createdAt) };
+    const verdict = needs.verdict(pr.headSha);
+    if (verdict === "none") return { ...pr, verdict, headSince: headSince(pr, createdAt) };
+    if (verdict !== "success") return { ...pr, verdict };
+    return { ...pr, verdict, behindBy: needs.behindBy(pr.headSha) };
+  };
 
-/* Snapshot: runs. Completed ones within the lookback, plus everything still live. */
+  const lookbackMinutes = Math.max(deadlines.stuckMinutes, deadlines.verdictMinutes, deadlines.updateMinutes) + 30;
+  /** Only the runs that could cover a labeled subject need their jobs read. */
+  const labeled = (labels: readonly string[]): boolean => labels.some((l) => l.startsWith("agent:")) && !leftAlone(labels);
 
-const lookbackMinutes = Math.max(deadlines.stuckMinutes, deadlines.verdictMinutes, deadlines.updateMinutes) + 30;
-/** Only the runs that could cover a labeled subject need their jobs read. */
-const labeled = (labels: readonly string[]): boolean => labels.some((l) => l.startsWith("agent:")) && !leftAlone(labels);
-
-const readRuns = (issues: readonly TicketState[], prs: readonly PrState[]): Run[] => {
-  const since = new Date(now.getTime() - lookbackMinutes * 60_000).toISOString();
-  const runsById = new Map<number, Run>();
-  for (const query of [`created=%3E%3D${since}`, "status=queued", "status=in_progress", "status=waiting"]) {
-    for (const raw of paginate(`repos/${repo}/actions/runs?${query}&per_page=100`, "runs", readEnv)) runsById.set(Number(raw.id), runFromGitHub(raw));
-  }
-  const subjects = [
-    ...issues.filter((t) => labeled(t.labels)).map((t) => ({ kind: "issue" as const, title: t.title })),
-    ...prs.filter((p) => labeled(p.labels)).map((p) => ({ kind: "pr" as const, headRef: p.headRef })),
-  ];
-  for (const subject of subjects) {
-    for (const run of runsFor(subject, [...runsById.values()])) {
-      if (run.role !== undefined) continue;
-      try {
-        const jobs = paginate(`repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`, "jobs", readEnv);
-        run.role = roleFromJobs(jobs);
-      } catch (error) {
-        console.log(`::warning::Could not read the jobs of run ${run.id}; treating it as covering while live: ${errorMessage(error)}`);
+  const readRuns = (issues: readonly TicketState[], prs: readonly PrState[]): Run[] => {
+    const since = new Date(now.getTime() - lookbackMinutes * 60_000).toISOString();
+    const runs = needs.recentRuns(since);
+    const subjects = [
+      ...issues.filter((t) => labeled(t.labels)).map((t) => ({ kind: "issue" as const, title: t.title })),
+      ...prs.filter((p) => labeled(p.labels)).map((p) => ({ kind: "pr" as const, headRef: p.headRef })),
+    ];
+    for (const subject of subjects) {
+      for (const r of runsFor(subject, runs)) {
+        if (r.role !== undefined) continue;
+        try {
+          r.role = roleFromJobs(needs.jobs(r.id));
+        } catch (error) {
+          console.log(`::warning::Could not read the jobs of run ${r.id}; treating it as covering while live: ${errorMessage(error)}`);
+        }
       }
     }
-  }
-  return [...runsById.values()];
-};
+    return runs;
+  };
 
-const readSnapshot = (): Snapshot => {
-  const issues = readIssues();
-  const prs = readPrs();
-  return { now: now.toISOString(), base, issues, prs, runs: readRuns(issues, prs), sweepUrl: runUrl };
-};
+  const readSnapshot = (): Snapshot => {
+    const issues = needs.openTickets();
+    const prs = needs.openPrs().map(withMergeState);
+    return { now: now.toISOString(), base, issues, prs, runs: readRuns(issues, prs), sweepUrl: runUrl };
+  };
 
-/* A failed read aborts the sweep: a partial snapshot would read as stranded subjects and repair them wrongly. */
-let snapshot: Snapshot;
-try {
-  snapshot = readSnapshot();
-} catch (error) {
-  if (!(error instanceof GhError)) throw error;
-  console.error(`::error::Sweep of ${repo} aborted before deciding anything: ${error.message}`);
-  process.exit(1);
-}
-
-/* Decide and apply. */
-
-const decisions = reconcile(snapshot, deadlines, policy);
-console.log(
-  `Sweep of ${repo} at ${snapshot.now}: ${snapshot.issues.length} open issue(s), ${snapshot.prs.length} open PR(s) on ${base}, ${snapshot.runs.length} run(s) in the last ${lookbackMinutes} min or live; deadlines stuck ${deadlines.stuckMinutes}, verdict ${deadlines.verdictMinutes}, update ${deadlines.updateMinutes} min.`,
-);
-for (const d of decisions) console.log(d.log);
-
-/** A subject's kind is gh's own noun for it, so it is the subcommand: `gh issue edit`, `gh pr edit`. */
-const edit = (subject: Decision["subject"], args: string[]): void => {
-  gh([subject.kind, "edit", String(subject.number), "--repo", repo, ...args]);
-};
-/** A subject's labels right now: the snapshot may be stale by the time a repair lands. */
-const labelsOf = (number: number): string[] =>
-  ghJson(["issue", "view", String(number), "--repo", repo, "--json", "labels", "--jq", "[.labels[].name]"]);
-const comment = (subject: Decision["subject"], body: string): void => {
-  gh([subject.kind, "comment", String(subject.number), "--repo", repo, "--body", body]);
-};
-
-const apply = (d: Decision): void => {
-  const { action, subject } = d;
-  switch (action.type) {
-    case "none":
-      return;
-    case "relabel":
-      for (const label of action.remove) edit(subject, ["--remove-label", label]);
-      edit(subject, ["--add-label", action.add]);
-      if (d.comment) comment(subject, d.comment);
-      return;
-    case "escalate":
-      for (const label of action.remove) edit(subject, ["--remove-label", label]);
-      edit(subject, ["--add-label", action.add]);
-      if (d.comment) comment(subject, d.comment);
-      if (action.ticket !== undefined) {
-        // Escalating the PR parks its ticket on the same label set (#50). The ticket's
-        // labels are read here, not taken from the snapshot: an earlier repair in this
-        // same sweep may have changed them, and the ticket may be closed and unlisted.
-        const ticket = { kind: "issue" as const, number: action.ticket };
-        const ticketLabels = escalationLabels(labelsOf(action.ticket));
-        for (const label of ticketLabels.remove) edit(ticket, ["--remove-label", label]);
-        edit(ticket, ["--add-label", ticketLabels.add]);
-        comment(
-          ticket,
-          `PR #${subject.number} was escalated by the reconciler: ${d.log}\n\nLabels here: ${ticketLabels.remove.length > 0 ? `\`${ticketLabels.remove.join("`, `")}\` removed, ` : ""}\`${ticketLabels.add}\` added. To hand it back, remove \`${ticketLabels.add}\` and add \`ready-for-agent\` again.${runUrl ? `\n\nSweep: ${runUrl}` : ""}`,
-        );
-      }
-      return;
-    case "comment":
-      // The comment is the whole repair (#230). It is posted with GH_TOKEN, the
-      // factory's own PAT, rather than the GITHUB_TOKEN identity every workflow in
-      // a target shares, so nothing but the factory can write the marker that turns
-      // it off: ADR 0002 keeps that trust exemption narrow for exactly this reason.
-      if (d.comment) comment(subject, d.comment);
-      return;
-    case "dispatch":
-      gh(["api", "--method", "POST", `repos/${repo}/dispatches`, "-f", `event_type=${action.eventType}`, "-F", `client_payload[pr]=${action.pr}`, "--silent"]);
-      return;
-    case "arm-auto-merge":
-      // The same call the implement workflow's non-fatal step makes, and idempotent.
-      gh(["pr", "merge", String(action.pr), "--repo", repo, "--auto", "--squash"]);
-      return;
-  }
-};
-
-const applied: string[] = [];
-const failed: { log: string; error: string }[] = [];
-/** Re-arms GitHub refused: warned, not failed, but recorded so a standing refusal is visible. */
-const refused: { log: string; error: string }[] = [];
-for (const d of decisions) {
-  if (d.action.type === "none" || dryRun) continue;
+  /* A failed read aborts the pass: a partial snapshot would read as stranded subjects and repair them wrongly. */
+  let snapshot: Snapshot;
   try {
-    apply(d);
-    applied.push(d.log);
-    console.log(`Applied: ${d.log}`);
+    snapshot = readSnapshot();
   } catch (error) {
-    const message = errorMessage(error);
-    // A refused re-arm is the target's setup, not a broken sweep: GitHub refuses
-    // auto-merge on a repo that allows none and on a main whose ruleset requires
-    // nothing. The implement workflow's own step is non-fatal for that same reason
-    // and has already commented on the PR naming the fix. So warn and carry on: one
-    // unonboarded target must not turn every sweep red forever (#83).
-    if (d.action.type === "arm-auto-merge") {
-      // The cause is in the message, not assumed: a target that allows no auto-merge and a
-      // PR already mergeable ("clean status") both refuse here, and so does a PAT that lost
-      // pull_requests write. Naming onboard.sh as the fix for all three would misread the
-      // last one, so the message says what GitHub said and offers onboard.sh as the usual fix.
-      refused.push({ log: d.log, error: message });
-      console.log(`::warning::Could not re-arm auto-merge on PR #${d.action.pr} of ${repo}: ${message}. If the target refuses auto-merge, run scripts/onboard.sh there.`);
-      continue;
-    }
-    failed.push({ log: d.log, error: message });
-    console.error(`::error::Could not apply "${d.log}": ${message}`);
+    if (!(error instanceof GhError)) throw error;
+    const aborted = `Sweep of ${repo} aborted before deciding anything: ${error.message}`;
+    console.error(`::error::${aborted}`);
+    return { aborted, decisions: [], applied: [], refused: [], failed: [] };
   }
-}
 
-const outputDir = process.env.OUTPUT_DIR;
-if (outputDir) {
-  fs.mkdirSync(outputDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(outputDir, "sweep.json"),
-    JSON.stringify({ repo, dryRun, deadlines, trusted: policy.associations, snapshot, decisions, applied, refused, failed }, null, 2),
+  const decisions = reconcile(snapshot, deadlines, policy);
+  console.log(
+    `Sweep of ${repo} at ${snapshot.now}: ${snapshot.issues.length} open issue(s), ${snapshot.prs.length} open PR(s) on ${base}, ${snapshot.runs.length} run(s) in the last ${lookbackMinutes} min or live; deadlines stuck ${deadlines.stuckMinutes}, verdict ${deadlines.verdictMinutes}, update ${deadlines.updateMinutes} min.`,
   );
-}
+  for (const d of decisions) console.log(d.log);
 
-const repairs = decisions.filter((d) => d.action.type !== "none").length;
-console.log(`${decisions.length} decision(s), ${repairs} repair(s), ${applied.length} applied, ${refused.length} refused, ${failed.length} failed${dryRun ? " (dry run)" : ""}.`);
-if (failed.length > 0) process.exit(1);
+  const apply = (d: Decision): void => {
+    const { action, subject } = d;
+    switch (action.type) {
+      case "none":
+        return;
+      case "relabel":
+        for (const label of action.remove) needs.removeLabel(subject, label);
+        needs.addLabel(subject, action.add);
+        if (d.comment) needs.comment(subject, d.comment);
+        return;
+      case "escalate":
+        for (const label of action.remove) needs.removeLabel(subject, label);
+        needs.addLabel(subject, action.add);
+        if (d.comment) needs.comment(subject, d.comment);
+        if (action.ticket !== undefined) {
+          // Escalating the PR parks its ticket on the same label set (#50). The ticket's
+          // labels are read here, not taken from the snapshot: an earlier repair in this
+          // same pass may have changed them, and the ticket may be closed and unlisted.
+          const ticket: Subject = { kind: "issue", number: action.ticket };
+          const ticketLabels = escalationLabels(needs.currentLabels(action.ticket));
+          for (const label of ticketLabels.remove) needs.removeLabel(ticket, label);
+          needs.addLabel(ticket, ticketLabels.add);
+          needs.comment(
+            ticket,
+            `PR #${subject.number} was escalated by the reconciler: ${d.log}\n\nLabels here: ${ticketLabels.remove.length > 0 ? `\`${ticketLabels.remove.join("`, `")}\` removed, ` : ""}\`${ticketLabels.add}\` added. To hand it back, remove \`${ticketLabels.add}\` and add \`ready-for-agent\` again.${runUrl ? `\n\nSweep: ${runUrl}` : ""}`,
+          );
+        }
+        return;
+      case "comment":
+        // The comment is the whole repair (#230), posted with the write token so
+        // nothing but the factory can write the marker that turns it off (ADR 0002).
+        if (d.comment) needs.comment(subject, d.comment);
+        return;
+      case "dispatch":
+        needs.dispatch(action.eventType, action.pr);
+        return;
+      case "arm-auto-merge":
+        needs.armAutoMerge(action.pr);
+        return;
+    }
+  };
+
+  const applied: string[] = [];
+  const failed: { log: string; error: string }[] = [];
+  const refused: { log: string; error: string }[] = [];
+  for (const d of decisions) {
+    if (d.action.type === "none" || dryRun) continue;
+    try {
+      apply(d);
+      applied.push(d.log);
+      console.log(`Applied: ${d.log}`);
+    } catch (error) {
+      const message = errorMessage(error);
+      // A refused re-arm is the target's setup, not a broken sweep: GitHub refuses
+      // auto-merge on a repo that allows none and on a main whose ruleset requires
+      // nothing. So warn and carry on: one unonboarded target must not turn every
+      // sweep red forever (#83).
+      if (d.action.type === "arm-auto-merge") {
+        refused.push({ log: d.log, error: message });
+        console.log(`::warning::Could not re-arm auto-merge on PR #${d.action.pr} of ${repo}: ${message}. If the target refuses auto-merge, run scripts/onboard.sh there.`);
+        continue;
+      }
+      failed.push({ log: d.log, error: message });
+      console.error(`::error::Could not apply "${d.log}": ${message}`);
+    }
+  }
+
+  const repairs = decisions.filter((d) => d.action.type !== "none").length;
+  console.log(`${decisions.length} decision(s), ${repairs} repair(s), ${applied.length} applied, ${refused.length} refused, ${failed.length} failed${dryRun ? " (dry run)" : ""}.`);
+
+  return { snapshot, decisions, applied, refused, failed };
+};

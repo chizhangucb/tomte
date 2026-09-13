@@ -112,7 +112,11 @@ A human's declaration that the factory cannot run, so its checks are not require
 _Avoid_: outage (names the weather rather than the decision), break-glass, bypass (GitHub's word for the admin route this replaces), exemption.
 
 **Target repo**:
-A repo the factory is allowed to work on. First one is chronicle.
+A repo the factory is allowed to work on. First one is chronicle. `factory/lib/target-repo.ts` is the shared module that holds the GitHub-backed reads and writes the factory's scripts make against one, written once, choosing the reading or writing key per function so no script names a key.
+
+**Needs record**:
+What one script needs from the Target repo, declared as a record of named domain reads and writes (the sweep's `Needs`, in the shape of the heartbeat's `Pass`) and handed to the script from outside: `target-repo.ts` in production, an in-memory target repo in a test. Never a raw `gh` call. Each script names only what it uses, and which reads may fail softly stays the script's own policy.
+_Avoid_: seam on its own (too broad), gh wrapper (the record is domain reads, not commands).
 
 **Caller**:
 The one workflow file a target repo carries, at its own `.github/workflows/factory.yml`. It calls the factory's reusable workflows and holds that target's inputs. Copied from `templates/factory.yml`.

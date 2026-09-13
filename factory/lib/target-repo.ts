@@ -1,0 +1,173 @@
+/**
+ * Target repo (#281): the GitHub-backed reads and writes the factory's scripts
+ * make against a target, written once here and handed to a script as its needs
+ * record. docs/pipeline.md, "How a script is wired", carries the pattern.
+ *
+ * The key choice lives here, not in any script: reads a fine-grained PAT cannot
+ * make (Actions runs and jobs, commit statuses) use `READ_TOKEN`, falling back
+ * to `GH_TOKEN`; everything else, every write among them, uses `GH_TOKEN` so its
+ * events fire. Those two env names and that fallback are #281's to keep and
+ * #282's to rename; no function here takes a key.
+ *
+ * Every function throws `GhError` on failure, the shape `lib/gh.ts` throws, a
+ * read that answered with something other than JSON included. Which of those a
+ * script may shrug off is the script's own policy, decided in the script.
+ *
+ * The mapping from GitHub's JSON to the factory's shapes stays pure and stays
+ * in `dispatch/reconcile.ts` and `dispatch/gh-read.ts`; this module calls it,
+ * it does not absorb it.
+ *
+ * Builtins only, imported with explicit `.ts` extensions, so the dispatch job
+ * runs it on bare `node --experimental-strip-types` with no `npm ci`.
+ */
+import {
+  PROJECTIONS,
+  type Projection,
+  STATUSES_PROJECTION,
+  parseItems,
+} from "../dispatch/gh-read.ts";
+import {
+  type PrComment,
+  type PrState,
+  type Run,
+  type Subject,
+  type TicketState,
+  type VerdictState,
+  commentFromGitHub,
+  leftAlone,
+  marksFromTimeline,
+  prFromGitHub,
+  runFromGitHub,
+  stateSinceFromTimeline,
+  ticketFromGitHub,
+} from "../dispatch/reconcile.ts";
+import { type JobSummary, type Needs, type OpenPr } from "../dispatch/sweep.ts";
+import { type Author } from "./trusted-authors.ts";
+import { GhError, gh } from "./gh.ts";
+
+/**
+ * The GitHub-backed target repo for one owner/repo, on one base branch. Its
+ * functions are the sweep's `Needs`; another script's record is a subset of the
+ * same set.
+ */
+export const targetRepo = (repo: string, base: string): Needs => {
+  // The reading key overrides the writing one for the reads a fine-grained PAT
+  // cannot make. Read once here so no function names a key (#281).
+  const readEnv = { ...process.env, GH_TOKEN: process.env.READ_TOKEN || process.env.GH_TOKEN };
+
+  /**
+   * A read whose command answered with something other than JSON is a failure of
+   * that command, thrown in the shape `gh` throws (`GhError`): the command and
+   * the cause, no stack, no token.
+   */
+  const ghJson = (args: string[], env?: NodeJS.ProcessEnv): any => {
+    const out = gh(args, env);
+    try {
+      return JSON.parse(out);
+    } catch {
+      throw new GhError(args, new Error(`printed something other than JSON: ${out.slice(0, 200)}`));
+    }
+  };
+
+  /** All pages of `endpoint`, each projected by gh to the fields the reconciler maps, one item per line. */
+  const paginate = (endpoint: string, projection: Projection, env?: NodeJS.ProcessEnv): any[] => {
+    const args = ["api", "--paginate", endpoint, "--jq", PROJECTIONS[projection]];
+    try {
+      return parseItems(gh(args, env));
+    } catch (error) {
+      if (error instanceof GhError) throw error;
+      throw new GhError(args, error);
+    }
+  };
+
+  const timeline = (number: number): any[] => paginate(`repos/${repo}/issues/${number}/timeline?per_page=100`, "timeline");
+
+  /** A subject's label state: when its current state label went on, and the sweep marks on it. */
+  const withLabelState = <T extends TicketState | PrState>(subject: T, stateLabels: readonly string[]): T => {
+    const state = stateLabels.find((l) => subject.labels.includes(l));
+    if (!state || leftAlone(subject.labels)) return subject;
+    const events = timeline(subject.number);
+    return { ...subject, stateSince: stateSinceFromTimeline(events, state), marks: marksFromTimeline(events) };
+  };
+
+  const openTickets = (): TicketState[] =>
+    paginate(`repos/${repo}/issues?state=open&per_page=100`, "issues")
+      .filter((raw: any) => !raw.pull_request)
+      .map(ticketFromGitHub)
+      .map((t: TicketState) => withLabelState(t, ["agent:in-progress", "agent:implement"]));
+
+  /** `gh pr list --json` is its own projection; 200 PRs with bodies fit the buffer with room. */
+  const openPrs = (): OpenPr[] => {
+    const rawPrs: any[] = ghJson([
+      "pr", "list", "--repo", repo, "--state", "open", "--base", base, "--limit", "200",
+      "--json", "number,title,headRefName,headRefOid,labels,autoMergeRequest,body,createdAt,isDraft,isCrossRepository",
+    ]);
+    return rawPrs.map((raw) => ({
+      pr: withLabelState(prFromGitHub(raw), ["agent:in-progress", "agent:review", "agent:implement"]),
+      createdAt: raw.createdAt,
+    }));
+  };
+
+  const recentRuns = (since: string): Run[] => {
+    const runsById = new Map<number, Run>();
+    for (const query of [`created=%3E%3D${since}`, "status=queued", "status=in_progress", "status=waiting"]) {
+      for (const raw of paginate(`repos/${repo}/actions/runs?${query}&per_page=100`, "runs", readEnv)) runsById.set(Number(raw.id), runFromGitHub(raw));
+    }
+    return [...runsById.values()];
+  };
+
+  const jobs = (runId: number): JobSummary[] => paginate(`repos/${repo}/actions/runs/${runId}/jobs?per_page=100`, "jobs", readEnv);
+
+  const verdict = (sha: string): VerdictState => {
+    const statuses: { context: string; state: string }[] = ghJson(["api", `repos/${repo}/commits/${sha}/status`, "--jq", STATUSES_PROJECTION], readEnv);
+    const state = statuses.find((s) => s.context === "factory/verdict")?.state;
+    return state === "pending" || state === "success" || state === "failure" || state === "error" ? state : "none";
+  };
+
+  const commitDate = (sha: string): string => gh(["api", `repos/${repo}/commits/${sha}`, "--jq", ".commit.committer.date"]).trim();
+
+  const behindBy = (sha: string): number => Number(gh(["api", `repos/${repo}/compare/${base}...${sha}`, "--jq", ".behind_by"]).trim());
+
+  /**
+   * Whoever opened a ticket, via REST because `gh issue view --json` carries no
+   * `author_association`, and that is the field the `ticket-author` channel is
+   * judged on (#179).
+   */
+  const ticketAuthor = (ticket: number): Author => {
+    const raw = ghJson(["api", `repos/${repo}/issues/${ticket}`, "--jq", "{association: .author_association, login: .user.login}"]);
+    return { association: raw.association, login: raw.login };
+  };
+
+  const prComments = (pr: number): PrComment[] => paginate(`repos/${repo}/issues/${pr}/comments?per_page=100`, "comments").map(commentFromGitHub);
+
+  const factoryLogin = (): string => gh(["api", "user", "--jq", ".login"]).trim();
+
+  const currentLabels = (subject: number): string[] =>
+    ghJson(["issue", "view", String(subject), "--repo", repo, "--json", "labels", "--jq", "[.labels[].name]"]);
+
+  /** A subject's kind is gh's own noun for it, so it is the subcommand: `gh issue edit`, `gh pr edit`. */
+  const edit = (subject: Subject, args: string[]): void => {
+    gh([subject.kind, "edit", String(subject.number), "--repo", repo, ...args]);
+  };
+
+  return {
+    openTickets,
+    openPrs,
+    recentRuns,
+    jobs,
+    verdict,
+    commitDate,
+    behindBy,
+    ticketAuthor,
+    prComments,
+    factoryLogin,
+    currentLabels,
+    addLabel: (subject, label) => edit(subject, ["--add-label", label]),
+    removeLabel: (subject, label) => edit(subject, ["--remove-label", label]),
+    comment: (subject, body) => gh([subject.kind, "comment", String(subject.number), "--repo", repo, "--body", body]),
+    dispatch: (eventType, pr) =>
+      gh(["api", "--method", "POST", `repos/${repo}/dispatches`, "-f", `event_type=${eventType}`, "-F", `client_payload[pr]=${pr}`, "--silent"]),
+    // The same call the implement workflow's non-fatal step makes, and idempotent.
+    armAutoMerge: (pr) => gh(["pr", "merge", String(pr), "--repo", repo, "--auto", "--squash"]),
+  };
+};

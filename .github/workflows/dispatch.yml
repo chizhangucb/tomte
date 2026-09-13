@@ -108,6 +108,7 @@ jobs:
             factory/lib/gh.ts
             factory/lib/labels.ts
             factory/lib/linked-issue.ts
+            factory/lib/target-repo.ts
             factory/lib/trusted-authors.ts
             factory/lib/verdict.ts
             factory/retry/escalation.ts
@@ -143,7 +144,7 @@ jobs:
           TRUSTED_AUTHOR_ASSOCIATIONS: ${{ inputs.trusted_author_associations }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           OUTPUT_DIR: ${{ runner.temp }}/factory-out
-        run: node --experimental-strip-types factory/factory/dispatch/sweep.ts
+        run: node --experimental-strip-types factory/factory/dispatch/sweep-run.ts
 
       - name: Upload decisions
         if: always()
