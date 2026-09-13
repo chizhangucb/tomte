@@ -61,8 +61,10 @@ export type DispatchNeeds = {
   readonly openPrs: () => { number: number; body: string | null }[];
   /**
    * One issue re-read right before writing; the listing it came from is seconds
-   * stale (#19). `undefined` when the number is no longer an open issue.
-   * `hasOpenPr` is unresolved here too, set by the dispatcher.
+   * stale (#19). A closed issue still comes back, so the recheck can skip it as
+   * "closed since the snapshot"; `undefined` only when the number is a PR rather
+   * than an issue (a deleted one is a 404, which throws). `hasOpenPr` is
+   * unresolved here too, set by the dispatcher.
    */
   readonly readIssue: (number: number) => DispatchIssue | undefined;
   /** A ticket's own comments, projected to the marker head, for whether the no-criteria comment was already posted. */
