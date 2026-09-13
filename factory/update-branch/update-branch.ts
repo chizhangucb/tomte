@@ -141,11 +141,15 @@ export const updateBranch = async (
     };
   };
 
-  /** Post the passing verdict found on `fromSha` onto `head`; true when one was posted. */
+  /**
+   * Post the passing verdict found on `fromSha` onto `head`; true when one was
+   * posted. A carried verdict with no link of its own gets this run's, as it did
+   * before the record picked up `postStatus` (the run URL lives here, not there).
+   */
   const carryOnto = (head: HeadCommit, fromSha: string): boolean => {
     const verdict = carriedVerdict(needs.statuses(fromSha), fromSha);
     if (!verdict) return false;
-    needs.postStatus(head.sha, verdict);
+    needs.postStatus(head.sha, { ...verdict, target_url: verdict.target_url ?? (runUrl || null) });
     return true;
   };
 

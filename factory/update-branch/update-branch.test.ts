@@ -111,6 +111,8 @@ test("a PR brought up to date: the update is requested, the marker is posted, an
   const carried = writes.find((w) => w.op === "postStatus" && w.sha === "h2new") as { status: CommitStatus };
   assert.equal(carried.status.context, VERDICT_CONTEXT);
   assert.match(carried.status.description ?? "", /carried from h1old by update-branch/);
+  // A carried verdict with no link of its own falls back to this run's URL.
+  assert.equal(carried.status.target_url, "https://ci.test/run/1");
   assert.equal(result.failed, 0);
   const outcome = result.outcomes.find((o) => o.number === 1)!;
   assert.equal(outcome.newHead, "h2new");
