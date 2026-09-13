@@ -21,10 +21,10 @@ Nothing from `src/` was copied. Re-verified on 2026-09-08 by grepping all 161 ex
 
 | Used | Where |
 |---|---|
-| `run()` | `factory/agent-workflows/shared/run-with-extraction.ts` and `factory/agent-workflows/implement/implement.ts`. The reviewer, implement-pr and the audit reach it through `runWithExtraction` |
-| `claudeCode()` | `factory/agent-workflows/shared/common.ts` |
-| `noSandbox()` | the four scripts that build a `run()` call: `implement/implement.ts`, `review/review.ts`, `implement-pr/implement-pr.ts` and `factory/audit/audit.ts` |
-| `Output.object()` | `review/review.ts`, `implement-pr/implement-pr.ts` and `factory/audit/audit.ts`; `shared/run-with-extraction.ts` takes the definition they build and never calls it |
+| `run()` | `factory/agent-workflows/shared/run-with-extraction.ts` and `factory/lib/run-agent-workflow.ts`, the shell every agent workflow runs inside (#313). A workflow with a tag to read reaches it through `runWithExtraction`; implement, which has none, through the shell's own call |
+| `claudeCode()` | `factory/lib/claude-agent.ts` |
+| `noSandbox()` | `factory/lib/run-agent-workflow.ts`, once for all four workflows (#313) |
+| `Output.object()` | `factory/lib/run-agent-workflow.ts`, over the schema each workflow hands it (#313); `shared/run-with-extraction.ts` takes the definition it builds and never calls it |
 | types `RunOptions`, `RunResult`, `OutputObjectDefinition`, `AgentProvider`, `AgentStreamEvent`, `LoggingOption` | the same files |
 
 ## 2. His pipeline's autonomy, honestly
