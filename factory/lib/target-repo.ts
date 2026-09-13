@@ -45,6 +45,10 @@ import { type JobSummary, type Needs, type OpenPr } from "../dispatch/sweep.ts";
 import { type Author } from "./trusted-authors.ts";
 import { GhError, gh } from "./gh.ts";
 
+/** How many commits on `base` a head lacks, from the compare API. Shared by both factories below. */
+const behindByOf = (repo: string, base: string, sha: string): number =>
+  Number(gh(["api", `repos/${repo}/compare/${base}...${sha}`, "--jq", ".behind_by"]).trim());
+
 /**
  * A read whose command answered with something other than JSON is a failure of
  * that command, thrown in the shape `gh` throws (`GhError`): the command and
@@ -126,7 +130,7 @@ export const targetRepo = (repo: string, base: string): Needs => {
 
   const commitDate = (sha: string): string => gh(["api", `repos/${repo}/commits/${sha}`, "--jq", ".commit.committer.date"]).trim();
 
-  const behindBy = (sha: string): number => Number(gh(["api", `repos/${repo}/compare/${base}...${sha}`, "--jq", ".behind_by"]).trim());
+  const behindBy = (sha: string): number => behindByOf(repo, base, sha);
 
   /**
    * Whoever opened a ticket, via REST because `gh issue view --json` carries no
@@ -207,7 +211,7 @@ export const updateBranchTargetRepo = (repo: string, base: string) => {
         labels: raw.labels.map((l: any) => l.name),
       })),
 
-    behindBy: (sha: string) => Number(gh(["api", `repos/${repo}/compare/${base}...${sha}`, "--jq", ".behind_by"]).trim()),
+    behindBy: (sha: string) => behindByOf(repo, base, sha),
 
     statuses: (sha: string) => ghJson(["api", `repos/${repo}/commits/${sha}/status`, "--jq", ".statuses"], statusEnv),
 
