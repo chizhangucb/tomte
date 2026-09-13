@@ -29,8 +29,8 @@ const HELPER_HOMES: Record<string, readonly string[]> = {
   "factory/lib/gh.ts": ["gh"],
 };
 
-/** The module the grab-bag used to be, by every specifier that could name it. */
-const DISSOLVED = /["'][^"']*\bcommon(?:\.ts)?["']/;
+/** An import of the module the grab-bag used to be, by every specifier that could name it. */
+const DISSOLVED = /(?:\bfrom|\bimport\()\s*["'][^"']*\bcommon(?:\.ts)?["']/;
 
 /** Every `.ts` file under `factory/`, `plugins/` aside: that subtree is a vendored plugin. */
 const factorySources = (dir = "factory"): string[] => {
@@ -64,8 +64,6 @@ test("no module imports the dissolved grab-bag, and it is not on disk", () => {
     "shared/common.ts is dissolved, not still sitting there",
   );
   for (const file of factorySources()) {
-    // This file names the dissolved path to assert its absence, so it is not a caller.
-    if (file === "factory/lib/helper-homes.test.ts") continue;
     const source = fs.readFileSync(new URL(file, repoRoot), "utf8");
     assert.ok(!DISSOLVED.test(source), `${file} imports the dissolved shared/common`);
   }

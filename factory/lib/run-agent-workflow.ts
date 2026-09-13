@@ -28,11 +28,12 @@ import {
 import { runWithRotation } from "./accounts";
 import { errorMessage } from "./errors";
 import { installPluginsForAttempt } from "./plugins";
+import type { Role } from "./model";
 import { fail } from "./run-output";
 import type { RunLog } from "./run-log";
 
-/** One agent run: what the workflow knows only once it has read its context. */
-export interface AgentRun {
+/** One agent run, as a workflow asks for it once it has read its context. */
+export interface AgentRunRequest {
   /** Resolved by the calling script (`model.ts`), so a `model:` label can move it. */
   readonly model: string;
   /**
@@ -45,15 +46,15 @@ export interface AgentRun {
     | ((agent: AgentProvider) => Record<string, string>);
 }
 
-export type RunAgent<T> = (run: AgentRun) => Promise<RunResult & { output: T }>;
+export type RunAgent<T> = (request: AgentRunRequest) => Promise<RunResult & { output: T }>;
 
 export interface AgentWorkflowOptions<T> {
   /** Rotation's name for the run: its log prefix and its usage record. */
   readonly name: string;
   /** sandcastle's name for the run, as the agent log carries it. */
   readonly runName: string;
-  /** Names the usage comment: implementer, reviewer, audit. */
-  readonly role: string;
+  /** Names the usage comment, and is the role `model.ts` resolved the model for. */
+  readonly role: Role;
   /** The workflow's own folder: `prompt.md`, and `extraction.md` when it extracts. */
   readonly dir: string;
   /**

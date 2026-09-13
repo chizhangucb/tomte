@@ -203,6 +203,10 @@ Choosing which subscription account a run uses, by remaining quota, and retrying
 A workflow that runs a model. Named with sandcastle's `agent-` prefix, so the prefix is how a reader tells which jobs spend a subscription: `agent-implement`, `agent-review`, `agent-implement-pr`, `agent-audit`. Everything else under `.github/workflows/` runs no model and keeps a plain name.
 _Avoid_: agent job (Actions' word for a step group inside a workflow).
 
+**Run shell**:
+The setup every **Agent workflow** runs inside, written once in `factory/lib/run-agent-workflow.ts` (#313): rotation over the accounts with the config dir each one gets, `noSandbox()`, the prompt file beside the script, the plugins installed into that dir before each attempt, and the `try`/`catch` that turns anything thrown into the reason the workflow posts. What the run *says* stays the workflow's: its `prompt.md`, its `promptArgs`, its `extraction.md` and the schema behind it. Distinct from the **Harness**, which is the CLI the shell drives the model through, and from the **Rotation**, which is one of the things it does.
+_Avoid_: wrapper, runner (Actions' word for the machine), the run (one attempt at one ticket).
+
 **Harness**:
 The CLI a run drives the model through, by sandcastle's provider name: `claude-code` today, `codex` or another vendor's under ADR 0001. What it bundles is the factory's to work around: skills the factory needs and the harness does not ship are vendored under `factory/plugins/`.
 _Avoid_: runner (Actions' word for the machine), provider (sandcastle's word for the object), CLI.
