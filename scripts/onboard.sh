@@ -143,6 +143,39 @@ workflow_body() {
 
 # Reads first, every one of them, so a refusal below happens before anything is written.
 default_branch=$(gh api "repos/$repo" --jq .default_branch)
+
+# The spec-title rule the dispatcher enforces (#296) lives in the target's issue-tracker.md,
+# which Matt's skills set up. Read it here, in the reads-first section: a target without it is
+# not set up yet and is refused before any write; a target that has it but not the rule has the
+# rule appended below. The bullet is idempotent: a re-run that finds it writes nothing.
+issue_tracker_path="docs/agents/issue-tracker.md"
+issue_tracker_bullet='- **A spec title starts `Spec:`**: prefix it after `/to-spec` publishes. The dispatcher skips any `Spec:` issue, sliced or not (#296).'
+write_issue_tracker=false
+it_error_file=$(mktemp)
+it_status=0
+issue_tracker_json=$(gh api "repos/$repo/contents/$issue_tracker_path" 2>"$it_error_file") || it_status=$?
+it_error=$(cat "$it_error_file"); rm -f "$it_error_file"
+if [ "$it_status" -ne 0 ]; then
+  case "$it_error" in
+    *"HTTP 404"*) refuse "$repo has no docs/agents/issue-tracker.md, so it isn't set up with Matt's skills yet.
+Set it up in that repo's clone, then re-onboard:
+
+  /mattpocock-skills:setup-matt-pocock-skills
+  scripts/onboard.sh $repo" ;;
+    *) refuse "$repo's docs/agents/issue-tracker.md could not be read:
+  $it_error
+It is where the dispatcher's spec-title rule lives, and a target that has it
+but reads as missing would be refused as un-set-up." ;;
+  esac
+fi
+issue_tracker_sha=$(jq -r '.sha // ""' <<<"$issue_tracker_json")
+issue_tracker_content=$(jq -r '(.content // "") | gsub("\n";"") | @base64d' <<<"$issue_tracker_json")
+# Idempotent: the rule's distinctive opening is the marker, so a re-run adds nothing and a
+# file that carries it, however the rest reads, is left alone.
+case "$issue_tracker_content" in
+  *"A spec title starts"*) ;;
+  *) write_issue_tracker=true; issue_tracker_new_content="$issue_tracker_content"$'\n'"$issue_tracker_bullet"$'\n' ;;
+esac
 caller_status=0
 caller=$(workflow_body factory.yml) || caller_status=$?
 case "$caller_status" in
@@ -439,6 +472,15 @@ payload=$(jq -cn --arg branch "$default_branch" --argjson checks "$checks" '{
   ]
 }')
 if [ "$own_checks" -eq 0 ]; then warn_no_own_check; fi
+# The spec-title rule, if the target's issue-tracker.md did not already carry it (#296). The
+# read and the refusal are done above; this only writes, and only when the rule is missing.
+if [ "$write_issue_tracker" = "true" ]; then
+  jq -n --arg content "$issue_tracker_new_content" --arg branch "$default_branch" --arg sha "$issue_tracker_sha" \
+    '{ message: "docs: the dispatcher skips a Spec:-titled issue (#296)",
+       branch: $branch, sha: $sha, content: ($content | @base64) }' |
+    gh api --method PUT "repos/$repo/contents/$issue_tracker_path" --input - >/dev/null
+  echo "issue-tracker.md: added the spec-title rule"
+fi
 # Before the ruleset, so the check the rule is about to require is already published. Only ever
 # on a target with no workflow that runs on a pull request: nothing here edits CI that exists.
 if [ "$write_starter" = "true" ]; then

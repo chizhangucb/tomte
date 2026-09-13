@@ -27,6 +27,7 @@ const ticket = (
   overrides: Partial<DispatchIssue> = {},
 ): DispatchIssue => ({
   number,
+  title: "A leaf ticket",
   body: CRITERIA,
   labels: ["ready-for-agent"],
   assigned: false,
@@ -105,6 +106,25 @@ test("a spec with sub-issues is not a ticket", () => {
   assert.equal(whySkipped(spec, OWNER_ONLY), "has sub-issues, not a ticket");
 });
 
+test("a Spec:-titled issue is a spec even before it is sliced, so it is never built as one ticket", () => {
+  // Between `/to-spec` and `/to-tickets` a spec is ready-for-agent with no
+  // sub-issues and no hold: only its title says it is not a ticket.
+  const spec = ticket(9, { title: "Spec: the whole retry handler", subIssues: 0 });
+  const leaf = ticket(10, { title: "Rewire the failed-attempt path" });
+  assert.deepEqual(numbers([spec, leaf]), [10]);
+  assert.equal(whySkipped(spec, OWNER_ONLY), "spec: title, not a ticket");
+  assert.equal(whySkipped(leaf, OWNER_ONLY), undefined);
+});
+
+test("the Spec: title is matched case-insensitively and after trimming", () => {
+  for (const title of ["Spec: x", "spec: x", "SPEC: x", "  Spec: x"]) {
+    assert.equal(whySkipped(ticket(1, { title }), OWNER_ONLY), "spec: title, not a ticket");
+  }
+  // A title that only mentions a spec, or uses the word inside, is still a ticket.
+  assert.equal(whySkipped(ticket(2, { title: "Specify the retry budget" }), OWNER_ONLY), undefined);
+  assert.equal(whySkipped(ticket(3, { title: "Add the Spec: prefix in docs" }), OWNER_ONLY), undefined);
+});
+
 test("selection keeps the tracker's order and returns whole issues", () => {
   const issues = [ticket(5), ticket(3, { openBlockers: 1 }), ticket(8)];
   assert.deepEqual(selectForDispatch(issues, OWNER_ONLY), [issues[0], issues[2]]);
@@ -124,6 +144,7 @@ test("fromGitHub maps the REST issue shape and drops pull requests", () => {
   const raw = [
     {
       number: 1,
+      title: "Wire the dispatcher against a needs record",
       labels: [{ name: "ready-for-agent" }, { name: "enhancement" }],
       assignees: [],
       author_association: "OWNER",
@@ -133,6 +154,7 @@ test("fromGitHub maps the REST issue shape and drops pull requests", () => {
     },
     {
       number: 2,
+      title: "Spec: the retry handler",
       labels: [{ name: "ready-for-agent" }],
       assignees: [{ login: "chi" }],
       author_association: "COLLABORATOR",
@@ -145,6 +167,7 @@ test("fromGitHub maps the REST issue shape and drops pull requests", () => {
   assert.deepEqual(fromGitHub(raw, new Set([1])), [
     {
       number: 1,
+      title: "Wire the dispatcher against a needs record",
       body: CRITERIA,
       labels: ["ready-for-agent", "enhancement"],
       assigned: false,
@@ -155,6 +178,7 @@ test("fromGitHub maps the REST issue shape and drops pull requests", () => {
     },
     {
       number: 2,
+      title: "Spec: the retry handler",
       body: null,
       labels: ["ready-for-agent"],
       assigned: true,
@@ -165,6 +189,7 @@ test("fromGitHub maps the REST issue shape and drops pull requests", () => {
     },
     {
       number: 4,
+      title: "",
       body: null,
       labels: ["ready-for-agent"],
       assigned: false,

@@ -292,7 +292,7 @@ test("a stood-down ticket resumes through the dispatcher once the hold comes off
   );
 
   const policy = trustPolicy("OWNER");
-  const stoodDown = { number: 7, body: "## Acceptance criteria\n\n- [ ] the stood-down ticket resumes\n", labels: ["ready-for-agent", "hold"], assigned: false, openBlockers: 0, hasOpenPr: false, authorAssociation: "OWNER" as const };
+  const stoodDown = { number: 7, title: "Resume the stood-down ticket", body: "## Acceptance criteria\n\n- [ ] the stood-down ticket resumes\n", labels: ["ready-for-agent", "hold"], assigned: false, openBlockers: 0, hasOpenPr: false, authorAssociation: "OWNER" as const };
   assert.equal(whySkipped(stoodDown, policy), "held: hold", "the dispatcher starts nothing while it is held");
   assert.equal(whySkipped({ ...stoodDown, labels: ["ready-for-agent"] }, policy), undefined, "and resumes it once the hold is off");
   // A retry already spent before the hold stays spent, and does not stop the resume either.
