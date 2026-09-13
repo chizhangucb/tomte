@@ -93,3 +93,11 @@ test("each stage's prose sits in exactly one doc file, not duplicated across the
     assert.deepEqual(homes.length, 1, `"${sentence}" appears in ${homes.join(", ")}, not one file`);
   }
 });
+
+test("dispatcher.md names both spec signals: the Spec: title and sub-issues (#296, #304)", () => {
+  // `select.ts` refuses a spec on title OR sub-issues; the doc must name both,
+  // or a reader learns only half the rule.
+  const dispatcher = read("docs/factory/dispatcher.md");
+  assert.match(dispatcher, /`Spec:`/, "dispatcher.md does not name the Spec: title signal");
+  assert.match(dispatcher, /sub-issues of its own/, "dispatcher.md does not name the sub-issue signal");
+});
