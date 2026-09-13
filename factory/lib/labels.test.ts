@@ -7,7 +7,30 @@ import * as fs from "node:fs";
 import { test } from "node:test";
 
 import { DISPATCH_LABEL, FACTORY_STATE_LABELS } from "../dispatch/select.ts";
-import { ESCALATION_LABEL, HANDED_OFF_LABELS, HOLD_LABEL, HOLD_LABELS, READY_LABEL } from "./labels.ts";
+import { ESCALATION_LABEL, HANDED_OFF_LABELS, HOLD_LABEL, HOLD_LABELS, READY_LABEL, REVIEW_LABEL } from "./labels.ts";
+
+/**
+ * A module's source with its comments taken out. Prose may name a label, since
+ * a comment explaining a transition has to spell the label it is about; code
+ * may not, because a spelling in code is a second home the first cannot reach.
+ */
+const codeOf = (file: string): string =>
+  fs
+    .readFileSync(new URL(`../../${file}`, import.meta.url), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+
+test("`agent:review` is spelled once, in REVIEW_LABEL, and every module that writes it reads it from there", () => {
+  // It was the one label with no constant: the reconciler re-added it, the
+  // target repo read it as a PR's state label, and HANDED_OFF_LABELS listed
+  // it, each from its own literal, so renaming it anywhere renamed it nowhere
+  // else and the reviewer would be started by a label nothing else recognised.
+  assert.equal(REVIEW_LABEL, "agent:review");
+  assert.ok(HANDED_OFF_LABELS.includes(REVIEW_LABEL), "a PR carrying it is handed off to the reviewer");
+  for (const file of ["factory/dispatch/reconcile.ts", "factory/lib/target-repo.ts"]) {
+    assert.doesNotMatch(codeOf(file), /agent:review/, `${file} spells agent:review instead of reading REVIEW_LABEL`);
+  }
+});
 
 /** The markdown a reader meets: everything under `docs/`, plus the front door and the glossary. */
 const docPages = (dir = "docs"): string[] => [

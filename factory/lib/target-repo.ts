@@ -51,6 +51,7 @@ import * as nodePath from "node:path";
 import { type DispatchNeeds } from "../dispatch/dispatch.ts";
 import { fromGitHub } from "../dispatch/select.ts";
 import { type JobSummary, type Needs, type OpenPr } from "../dispatch/sweep.ts";
+import { REVIEW_LABEL } from "./labels.ts";
 import { type Author } from "./trusted-authors.ts";
 import { GhError, gh } from "./gh.ts";
 
@@ -158,7 +159,7 @@ export const targetRepo = (repo: string, base: string): Needs => {
       "--json", "number,title,headRefName,headRefOid,labels,autoMergeRequest,body,createdAt,isDraft,isCrossRepository",
     ], writeEnv);
     return rawPrs.map((raw) => ({
-      pr: withLabelState(prFromGitHub(raw), ["agent:in-progress", "agent:review", "agent:implement"]),
+      pr: withLabelState(prFromGitHub(raw), ["agent:in-progress", REVIEW_LABEL, "agent:implement"]),
       createdAt: raw.createdAt,
     }));
   };

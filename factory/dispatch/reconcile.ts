@@ -67,7 +67,7 @@
  * `node --experimental-strip-types` without installing the engine.
  */
 import { isFactoryPr } from "../lib/factory-pr.ts";
-import { agentLabels, ESCALATION_LABEL, HOLD_LABELS, READY_LABEL } from "../lib/labels.ts";
+import { agentLabels, ESCALATION_LABEL, HOLD_LABELS, READY_LABEL, REVIEW_LABEL } from "../lib/labels.ts";
 import { issuesClosedBy } from "../lib/linked-issue.ts";
 import { type Author, type TrustPolicy, authorAssociation } from "../lib/trusted-authors.ts";
 import { escalationLabels } from "../retry/escalation.ts";
@@ -445,8 +445,8 @@ const decideTicket = (t: TicketState, snap: Snapshot, deadlines: Deadlines, read
 };
 
 const PR_STATES: readonly { label: string; roles: readonly RunRole[]; expected: string; add: string }[] = [
-  { label: "agent:in-progress", roles: ["review", "implement-pr"], expected: "review or implement-pr run", add: "agent:review" },
-  { label: "agent:review", roles: ["review"], expected: "review run", add: "agent:review" },
+  { label: "agent:in-progress", roles: ["review", "implement-pr"], expected: "review or implement-pr run", add: REVIEW_LABEL },
+  { label: REVIEW_LABEL, roles: ["review"], expected: "review run", add: REVIEW_LABEL },
   { label: "agent:implement", roles: ["implement-pr"], expected: "implement-pr run", add: "agent:implement" },
 ];
 
@@ -624,7 +624,7 @@ const decideUnjudged = (p: PrState, snap: Snapshot, deadlines: Deadlines, held: 
   if (verdict !== "none") return none(`#${p.number} (pr) not a factory PR, factory/verdict ${verdict} on ${sha}, deadline ${deadlines.verdictMinutes} min: judged or being judged`);
   const { age, head } = sinceHead(p, `not a factory PR, no factory/verdict on ${sha}`, Date.parse(snap.now), deadlines.verdictMinutes, reads.headSince(p));
   if (age !== undefined && age < deadlines.verdictMinutes) return none(`${head}: within deadline`);
-  return { subject, action: { type: "relabel", remove: [], add: "agent:review" }, log: `${head}: add agent:review` };
+  return { subject, action: { type: "relabel", remove: [], add: REVIEW_LABEL }, log: `${head}: add ${REVIEW_LABEL}` };
 };
 
 /**
@@ -667,7 +667,7 @@ const decidePrMerge = (p: PrState, snap: Snapshot, deadlines: Deadlines, held: s
     if (age !== undefined && age < deadlines.verdictMinutes) return none(`${head}: within deadline`);
     // A hold withholds the reviewer, never the merge path above and below (#210).
     if (held) return none(`${head}: held: ${held}`);
-    return { subject, action: { type: "relabel", remove: [], add: "agent:review" }, log: `${head}: add agent:review` };
+    return { subject, action: { type: "relabel", remove: [], add: REVIEW_LABEL }, log: `${head}: add ${REVIEW_LABEL}` };
   }
   if (verdict === "pending") return none(`#${p.number} (pr) auto-merge armed, factory/verdict pending on ${sha}, deadline ${deadlines.verdictMinutes} min: reviewer running`);
   if (verdict !== "success") return none(`#${p.number} (pr) auto-merge armed, factory/verdict ${verdict} on ${sha}, deadline ${deadlines.verdictMinutes} min: the retry handler owns it`);

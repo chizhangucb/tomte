@@ -61,6 +61,14 @@ export const BLOCKED_LABEL = "agent:blocked";
 export const IN_PROGRESS_LABEL = "agent:in-progress";
 
 /**
+ * Hand the PR to the reviewer. A producer labels its own PR with it to ask for
+ * a verdict (ADR 0007), the implement run adds it when it has opened the PR,
+ * and the reconciler re-adds it on a PR whose review run was lost or whose
+ * head has gone unjudged past the deadline.
+ */
+export const REVIEW_LABEL = "agent:review";
+
+/**
  * Labels that stop an agent starting, read from here by the dispatcher, the
  * retry handler (`findHold`) and the reconciler so they cannot disagree. `hold`
  * alone since #210.
@@ -68,7 +76,7 @@ export const IN_PROGRESS_LABEL = "agent:in-progress";
 export const HOLD_LABELS: readonly string[] = [HOLD_LABEL];
 
 /** Labels that say an agent already holds the subject (implementer or reviewer, running or queued) or that it is parked. */
-export const HANDED_OFF_LABELS: readonly string[] = [IMPLEMENT_LABEL, IN_PROGRESS_LABEL, "agent:review", BLOCKED_LABEL];
+export const HANDED_OFF_LABELS: readonly string[] = [IMPLEMENT_LABEL, IN_PROGRESS_LABEL, REVIEW_LABEL, BLOCKED_LABEL];
 
 /**
  * The two namespaces the factory writes labels in. A target's caller drops
