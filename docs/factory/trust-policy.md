@@ -1,0 +1,8 @@
+# Trust policy
+
+`CONTEXT.md` defines it: one policy per run, in `factory/lib/trusted-authors.ts`, passed down as a required argument, deciding whose tickets run and whose comments an agent reads. It is the v0 control that stands in for a sandbox (ADR 0008). What the glossary does not say:
+
+- An untrusted parent spec is named by number alone, title as well as body withheld. The retry marker is read only from a trusted comment, on the ticket path and the PR path alike. Each run logs one line naming what it dropped.
+- Widen it only to people who could already push (`OWNER,MEMBER,COLLABORATOR`), and set all five jobs together: the retry marker is a comment the factory posted with `FACTORY_PAT`, so a list that excludes that account's association drops the marker and a retry runs with no failure context.
+- Two channels are exempt and only two: the reviewer's own summary and thread comments, posted with `GITHUB_TOKEN`, which GitHub reports as `NONE` on every repo. Without the exemption the reviewer's findings would be dropped before implement-pr read them. Every other workflow in the target posts under that same `github-actions` login, so a bot echoing a fork PR's branch name or test output is judged like any stranger. The policy owns that list, not the call sites: `keep` and `trusts` take a channel name, every read reports the association and whatever login it has, and nothing outside `trusted-authors.ts` can opt a channel into the exemption.
+- An empty value falls back to `OWNER`; a payload with no association, or one GitHub does not send, reads as `NONE`. On an org-owned repo nobody is `OWNER` (the owner's issues read `MEMBER`), so #26 means changing this too.

@@ -18,7 +18,7 @@
  * (`update-branch-run.ts` in production, an in-memory target repo in
  * `update-branch.test.ts`). What it plans does not change, only how it is wired:
  * no `gh` call and no status-key env handling live here now; the module behind
- * the record picks the key. docs/pipeline.md, "How a script is wired", carries
+ * the record picks the key. docs/factory/layout.md, "How a script is wired", carries
  * the pattern.
  *
  * Which failures it may shrug off is still its own policy: the two documented

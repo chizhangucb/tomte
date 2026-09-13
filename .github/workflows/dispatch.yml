@@ -20,7 +20,7 @@
 # used to wake a sweep that re-stamped the ticket, so a cancelled run got a
 # replacement within seconds (#170). Why the caller still does not try to name
 # which of the admitted removals matter, and the one factory write that still wakes
-# a sweep: docs/pipeline.md, under Dispatcher.
+# a sweep: docs/factory/dispatcher.md.
 #
 # A heartbeat outside GitHub drives the sweep. GitHub's own cron was removed
 # from the caller in #270: measured on one private target it fired 6 times

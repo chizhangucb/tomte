@@ -78,7 +78,7 @@ jobs:
   # fix what caused the pause before lifting it. A pause does not cancel a run already in
   # flight, and it is what makes `gh run cancel` stick: the retry handler's re-label lands on
   # a gated implement job and starts nothing. Pause first, cancel second.
-  # docs/pipeline.md has the rest, including what a pause does not do.
+  # docs/factory/pause.md has the rest, including what a pause does not do.
   paused:
     if: vars.FACTORY_PAUSED != ''
     runs-on: ubuntu-latest
@@ -212,7 +212,7 @@ jobs:
       # node_version: "24"
       # Optional: whose words the audit reads, on the PR and on the linked ticket.
       # trusted_author_associations: OWNER,MEMBER,COLLABORATOR
-      # Optional: the strongest model the subscription serves (see docs/pipeline.md#audit).
+      # Optional: the strongest model the subscription serves (see docs/factory/audit.md).
       # audit_model: claude-fable-5-1
   update-branch:
     if: >-

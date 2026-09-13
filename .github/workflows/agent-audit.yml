@@ -11,7 +11,7 @@ on:
   workflow_call:
     inputs:
       audit_model:
-        description: Model for the audit. Should be the strongest one the subscription serves; docs/pipeline.md#audit names what was verified.
+        description: Model for the audit. Should be the strongest one the subscription serves; docs/factory/audit.md names what was verified.
         type: string
         default: claude-opus-5
       test_command:

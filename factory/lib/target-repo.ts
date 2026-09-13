@@ -1,7 +1,7 @@
 /**
  * Target repo (#281): the GitHub-backed reads and writes the factory's scripts
  * make against a target, written once here and handed to a script as its needs
- * record. docs/pipeline.md, "How a script is wired", carries the pattern.
+ * record. docs/factory/layout.md, "How a script is wired", carries the pattern.
  *
  * The key choice lives here, not in any script. Two settled names (#288 dropped
  * the old ones): the writing key is `FACTORY_PAT`, so its events fire, and the

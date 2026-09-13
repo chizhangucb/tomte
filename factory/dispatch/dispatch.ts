@@ -5,7 +5,7 @@
  * `DispatchNeeds` record, the shape of the sweep's `Needs`, and is handed it
  * from outside (`dispatch-run.ts` in production, an in-memory target repo in
  * `dispatch.test.ts`). What it selects does not change, only how it is wired: no
- * `gh` call lives here now. docs/pipeline.md, "How a script is wired", carries
+ * `gh` call lives here now. docs/factory/layout.md, "How a script is wired", carries
  * the pattern.
  *
  * Runs on the caller's `issues: [closed, labeled, unassigned, unlabeled]`, on
