@@ -29,7 +29,8 @@
  *   implementer, and implement-pr read that list off the PR (#119). The subject
  *   swapped on the read that was already there rather than a second one.
  */
-import { gh, safeSh, sh } from "./common";
+import { gh } from "../../lib/gh";
+import { safeSh, sh } from "../../lib/sh";
 import { parseDiffLines } from "./diff-lines";
 import { linkedIssueNumber } from "../../lib/linked-issue";
 import { renderIssue, type IssueView } from "../../lib/ticket-context";

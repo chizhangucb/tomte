@@ -11,7 +11,7 @@ import {
   asRecord,
   asString,
   standardSchema,
-} from "./common";
+} from "../../lib/coerce";
 import type { CriterionJudgement } from "../../lib/verdict";
 
 export interface InlineComment {

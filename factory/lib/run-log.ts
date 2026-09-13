@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentStreamEvent, LoggingOption } from "@ai-hero/sandcastle";
-import { fail, outputDir } from "../agent-workflows/shared/common";
+import { fail, outputDir } from "./run-output";
 import { errorMessage } from "./errors";
 
 /**

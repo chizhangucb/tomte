@@ -1,4 +1,5 @@
-import { fail, sh } from "../agent-workflows/shared/common";
+import { fail } from "./run-output";
+import { sh } from "./sh";
 
 /** `git status --porcelain` lines that are not sandcastle's own byproducts. */
 export const worktreeState = (): string[] =>

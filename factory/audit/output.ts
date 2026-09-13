@@ -1,4 +1,4 @@
-import { asArray, asOptionalString, asRecord, asString, standardSchema } from "../agent-workflows/shared/common";
+import { asArray, asOptionalString, asRecord, asString, standardSchema } from "../lib/coerce";
 import type { CriterionJudgement } from "../lib/verdict";
 import type { PlaceholderFinding } from "./report";
 

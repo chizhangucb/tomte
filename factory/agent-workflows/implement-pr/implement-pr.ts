@@ -50,12 +50,8 @@ import * as path from "node:path";
 import * as sandcastle from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import { runWithRotation } from "../../lib/accounts";
-import {
-  fail,
-  required,
-  writeJson,
-  writeText,
-} from "../shared/common";
+import { required } from "../../lib/env";
+import { fail, writeJson, writeText } from "../../lib/run-output";
 import { resolveRoleModel } from "../../lib/model";
 import { installPluginsForAttempt } from "../../lib/plugins";
 import { describeDropped, fetchPullRequestContext } from "../shared/review-context";

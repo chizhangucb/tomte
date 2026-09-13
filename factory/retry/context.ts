@@ -1,4 +1,4 @@
-import { gh } from "../agent-workflows/shared/common";
+import { gh } from "../lib/gh";
 import { errorMessage } from "../lib/errors";
 import type { TrustPolicy } from "../lib/trusted-authors";
 import { latestRetryContext, type RetryContext, retryPromptSection } from "./decide";

@@ -12,7 +12,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { gh, required, safeSh, sh, writeJson, writeText } from "../agent-workflows/shared/common";
+import { required } from "../lib/env";
+import { gh } from "../lib/gh";
+import { writeJson, writeText } from "../lib/run-output";
+import { safeSh, sh } from "../lib/sh";
 import { linkedIssueNumber } from "../lib/linked-issue";
 import { parseNameStatus, type ChangedFile } from "./changed-files";
 import { redGreenPlan, redGreenVerdict, type FileRun, type TestResult } from "./red-green";

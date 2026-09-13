@@ -6,17 +6,11 @@
  */
 import * as fs from "node:fs";
 import type { AgentProvider } from "@ai-hero/sandcastle";
-import {
-  asArray,
-  asOptionalString,
-  asRecord,
-  asString,
-  claudeAgent,
-  fail,
-  required,
-  sh,
-  writeText,
-} from "../agent-workflows/shared/common";
+import { claudeAgent } from "./claude-agent";
+import { asArray, asOptionalString, asRecord, asString } from "./coerce";
+import { required } from "./env";
+import { fail, writeText } from "./run-output";
+import { sh } from "./sh";
 import { errorMessage } from "./errors";
 import { createRunLog, type RunLog, settleRun } from "./run-log";
 import { type AccountToken, isRateLimited, pickToken } from "./rotation";
