@@ -125,7 +125,7 @@ jobs:
           GH_TOKEN: ${{ secrets.FACTORY_PAT }}
           TRUSTED_AUTHOR_ASSOCIATIONS: ${{ inputs.trusted_author_associations }}
           OUTPUT_DIR: ${{ runner.temp }}/factory-out
-        run: node --experimental-strip-types factory/factory/dispatch/dispatch.ts
+        run: node --experimental-strip-types factory/factory/dispatch/dispatch-run.ts
 
       - name: Reconcile stuck states
         # The sweep proper (#35): one logged decision per candidate, repairs with FACTORY_PAT so the

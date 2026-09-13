@@ -14,13 +14,14 @@
  * script may shrug off is the script's own policy, decided in the script.
  *
  * The mapping from GitHub's JSON to the factory's shapes stays pure and stays
- * in `dispatch/reconcile.ts` and `dispatch/gh-read.ts`; this module calls it,
- * it does not absorb it.
+ * in `dispatch/reconcile.ts`, `dispatch/gh-read.ts` and `dispatch/select.ts`;
+ * this module calls it, it does not absorb it.
  *
  * Builtins only, imported with explicit `.ts` extensions, so the dispatch job
  * runs it on bare `node --experimental-strip-types` with no `npm ci`.
  */
 import {
+  DISPATCH_ISSUE_PROJECTION,
   PROJECTIONS,
   type Projection,
   STATUSES_PROJECTION,
@@ -41,9 +42,54 @@ import {
   stateSinceFromTimeline,
   ticketFromGitHub,
 } from "../dispatch/reconcile.ts";
+import { type DispatchNeeds } from "../dispatch/dispatch.ts";
+import { type DispatchIssue, fromGitHub } from "../dispatch/select.ts";
 import { type JobSummary, type Needs, type OpenPr } from "../dispatch/sweep.ts";
 import { type Author } from "./trusted-authors.ts";
 import { GhError, gh } from "./gh.ts";
+
+// The reading key overrides the writing one for the reads a fine-grained PAT
+// cannot make. Resolved once so no function names a key (#281).
+const readEnv = { ...process.env, GH_TOKEN: process.env.READ_TOKEN || process.env.GH_TOKEN };
+
+/**
+ * A read whose command answered with something other than JSON is a failure of
+ * that command, thrown in the shape `gh` throws (`GhError`): the command and
+ * the cause, no stack, no token.
+ */
+const ghJson = (args: string[], env?: NodeJS.ProcessEnv): any => {
+  const out = gh(args, env);
+  try {
+    return JSON.parse(out);
+  } catch {
+    throw new GhError(args, new Error(`printed something other than JSON: ${out.slice(0, 200)}`));
+  }
+};
+
+/** All pages of `endpoint`, each projected by gh to the fields its readers map, one item per line. */
+const paginate = (endpoint: string, projection: Projection, env?: NodeJS.ProcessEnv): any[] => {
+  const args = ["api", "--paginate", endpoint, "--jq", PROJECTIONS[projection]];
+  try {
+    return parseItems(gh(args, env));
+  } catch (error) {
+    if (error instanceof GhError) throw error;
+    throw new GhError(args, error);
+  }
+};
+
+/** A subject's kind is gh's own noun for it, so it is the subcommand: `gh issue edit`, `gh pr edit`. */
+const edit = (repo: string, subject: Subject, args: string[]): void => {
+  gh([subject.kind, "edit", String(subject.number), "--repo", repo, ...args]);
+};
+
+/** Comment on a subject with the write key. */
+const postComment = (repo: string, subject: Subject, body: string): void => {
+  gh([subject.kind, "comment", String(subject.number), "--repo", repo, "--body", body]);
+};
+
+/** A subject's own comments, projected to the marker head, and who wrote each. The issues and PRs endpoint is one. */
+const commentsOf = (repo: string, subject: number): PrComment[] =>
+  paginate(`repos/${repo}/issues/${subject}/comments?per_page=100`, "comments").map(commentFromGitHub);
 
 /**
  * The GitHub-backed target repo for one owner/repo, on one base branch. Its
@@ -51,35 +97,6 @@ import { GhError, gh } from "./gh.ts";
  * same set.
  */
 export const targetRepo = (repo: string, base: string): Needs => {
-  // The reading key overrides the writing one for the reads a fine-grained PAT
-  // cannot make. Read once here so no function names a key (#281).
-  const readEnv = { ...process.env, GH_TOKEN: process.env.READ_TOKEN || process.env.GH_TOKEN };
-
-  /**
-   * A read whose command answered with something other than JSON is a failure of
-   * that command, thrown in the shape `gh` throws (`GhError`): the command and
-   * the cause, no stack, no token.
-   */
-  const ghJson = (args: string[], env?: NodeJS.ProcessEnv): any => {
-    const out = gh(args, env);
-    try {
-      return JSON.parse(out);
-    } catch {
-      throw new GhError(args, new Error(`printed something other than JSON: ${out.slice(0, 200)}`));
-    }
-  };
-
-  /** All pages of `endpoint`, each projected by gh to the fields the reconciler maps, one item per line. */
-  const paginate = (endpoint: string, projection: Projection, env?: NodeJS.ProcessEnv): any[] => {
-    const args = ["api", "--paginate", endpoint, "--jq", PROJECTIONS[projection]];
-    try {
-      return parseItems(gh(args, env));
-    } catch (error) {
-      if (error instanceof GhError) throw error;
-      throw new GhError(args, error);
-    }
-  };
-
   const timeline = (number: number): any[] => paginate(`repos/${repo}/issues/${number}/timeline?per_page=100`, "timeline");
 
   /** A subject's label state: when its current state label went on, and the sweep marks on it. */
@@ -138,17 +155,10 @@ export const targetRepo = (repo: string, base: string): Needs => {
     return { association: raw.association, login: raw.login };
   };
 
-  const prComments = (pr: number): PrComment[] => paginate(`repos/${repo}/issues/${pr}/comments?per_page=100`, "comments").map(commentFromGitHub);
-
   const factoryLogin = (): string => gh(["api", "user", "--jq", ".login"]).trim();
 
   const currentLabels = (subject: number): string[] =>
     ghJson(["issue", "view", String(subject), "--repo", repo, "--json", "labels", "--jq", "[.labels[].name]"]);
-
-  /** A subject's kind is gh's own noun for it, so it is the subcommand: `gh issue edit`, `gh pr edit`. */
-  const edit = (subject: Subject, args: string[]): void => {
-    gh([subject.kind, "edit", String(subject.number), "--repo", repo, ...args]);
-  };
 
   return {
     openTickets,
@@ -159,15 +169,32 @@ export const targetRepo = (repo: string, base: string): Needs => {
     commitDate,
     behindBy,
     ticketAuthor,
-    prComments,
+    prComments: (pr) => commentsOf(repo, pr),
     factoryLogin,
     currentLabels,
-    addLabel: (subject, label) => edit(subject, ["--add-label", label]),
-    removeLabel: (subject, label) => edit(subject, ["--remove-label", label]),
-    comment: (subject, body) => gh([subject.kind, "comment", String(subject.number), "--repo", repo, "--body", body]),
+    addLabel: (subject, label) => edit(repo, subject, ["--add-label", label]),
+    removeLabel: (subject, label) => edit(repo, subject, ["--remove-label", label]),
+    comment: (subject, body) => postComment(repo, subject, body),
     dispatch: (eventType, pr) =>
       gh(["api", "--method", "POST", `repos/${repo}/dispatches`, "-f", `event_type=${eventType}`, "-F", `client_payload[pr]=${pr}`, "--silent"]),
     // The same call the implement workflow's non-fatal step makes, and idempotent.
     armAutoMerge: (pr) => gh(["pr", "merge", String(pr), "--repo", repo, "--auto", "--squash"]),
   };
 };
+
+/**
+ * The GitHub-backed target repo for the dispatcher (#286): a subset of the same
+ * reads and writes, with the open-issues read carrying the dispatch fields
+ * `select.ts` maps. `hasOpenPr` is left for the dispatcher to resolve against
+ * `openPrs`, so this read stays one call. Every read is one a fine-grained PAT
+ * can make, so they use the write key like the reconciler's issue reads, no
+ * `READ_TOKEN` among them.
+ */
+export const dispatchNeeds = (repo: string): DispatchNeeds => ({
+  openIssues: () => fromGitHub(paginate(`repos/${repo}/issues?state=open&per_page=100`, "dispatch"), new Set()),
+  openPrs: () => ghJson(["pr", "list", "--repo", repo, "--state", "open", "--limit", "200", "--json", "number,body"]),
+  readIssue: (number) => fromGitHub([ghJson(["api", `repos/${repo}/issues/${number}`, "--jq", DISPATCH_ISSUE_PROJECTION])], new Set())[0],
+  comments: (number) => commentsOf(repo, number),
+  addLabel: (subject, label) => edit(repo, subject, ["--add-label", label]),
+  comment: (subject, body) => postComment(repo, subject, body),
+});
