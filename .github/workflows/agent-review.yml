@@ -336,7 +336,7 @@ jobs:
           ARTIFACT_NAME: factory-review-pr-${{ github.event.pull_request.number }}-run-${{ github.run_attempt }}
           OUTPUT_DIR: ${{ runner.temp }}/factory-out
         run: |
-          if tsx factory/factory/retry/retry.ts; then
+          if tsx factory/factory/retry/retry-run.ts; then
             exit 0
           fi
           gh pr edit "$PR_NUMBER" --add-label "agent:blocked" || true
@@ -354,7 +354,7 @@ jobs:
         # with no `agent:*` label, which nothing sweeps, and no `agent:blocked` either,
         # so the PR would be lost rather than requeued. requeued.txt is written by
         # whichever path requeued it: the step above on a rate limit, the retry handler
-        # (factory/retry/retry.ts, REQUEUED_FILE) on a head whose checks never settled.
+        # (factory/retry/retry-run.ts, REQUEUED_FILE) on a head whose checks never settled.
         if: always()
         run: |
           if [ -f "${RUNNER_TEMP}/factory-out/requeued.txt" ]; then

@@ -44,6 +44,9 @@ import {
   stateSinceFromTimeline,
   ticketFromGitHub,
 } from "../dispatch/reconcile.ts";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as nodePath from "node:path";
 import { type DispatchNeeds } from "../dispatch/dispatch.ts";
 import { fromGitHub } from "../dispatch/select.ts";
 import { type JobSummary, type Needs, type OpenPr } from "../dispatch/sweep.ts";
@@ -281,5 +284,72 @@ export const dispatchNeeds = (repo: string): DispatchNeeds => {
     comments: (number) => commentsOf(repo, number, writeEnv),
     addLabel: (subject, label) => edit(repo, subject, ["--add-label", label], writeEnv),
     comment: (subject, body) => postComment(repo, subject, body, writeEnv),
+  };
+};
+
+/**
+ * The GitHub-backed reads and writes the retry handler's failed-attempt path
+ * needs (#284), the shape of `retry/retry.ts`'s `RetryNeeds`. Assembled by
+ * `retry/retry-run.ts` and handed to the handler; a test hands it an in-memory
+ * target repo instead.
+ *
+ * The retry handler's two keys are still the ones it has always used, until
+ * #282 unifies them: reads (labels, a PR, the open PR list, the branch, the
+ * artifact) use the job's `GH_TOKEN` (its `GITHUB_TOKEN`, with checks: read);
+ * writes (labels, comments, close, disarm) use `FACTORY_PAT` so their label
+ * events fire. The choice lives here, not in the handler. Every function throws
+ * `GhError`; which of those the handler shrugs off is its own policy.
+ *
+ * The checks wait's reads (the head's statuses and check runs, a PR's
+ * mergeability) are not here: they carry a clock, and #285 seams them with an
+ * injected one. They stay in `retry-run.ts` until then.
+ */
+export const retryTargetRepo = (repo: string, branch: string) => {
+  // Writes fire label events only under FACTORY_PAT; the job's GH_TOKEN cannot.
+  const writeEnv = { ...process.env, GH_TOKEN: process.env.FACTORY_PAT, GITHUB_TOKEN: process.env.FACTORY_PAT };
+
+  const ghJson = (args: string[]): any => {
+    const out = gh(args);
+    try {
+      return JSON.parse(out);
+    } catch {
+      throw new GhError(args, new Error(`printed something other than JSON: ${out.slice(0, 200)}`));
+    }
+  };
+
+  const subject = (on: { readonly kind: "issue" | "pr"; readonly number: string }, args: string[]): void => {
+    gh([on.kind, "edit", on.number, "--repo", repo, ...args], writeEnv);
+  };
+
+  return {
+    viewPr: (number: string) => ghJson(["pr", "view", number, "--repo", repo, "--json", "state,body,headRefName"]),
+    openPrs: () =>
+      ghJson(["pr", "list", "--repo", repo, "--state", "open", "--limit", "200", "--json", "number,body,headRefName,isCrossRepository"]),
+    labelsOf: (on: { readonly kind: "issue" | "pr"; readonly number: string }) =>
+      ghJson([on.kind, "view", on.number, "--repo", repo, "--json", "labels", "--jq", "[.labels[].name]"]),
+    // A missing branch is a 404 gh throws for, which the handler reads as "gone".
+    branchExists: (): boolean => {
+      gh(["api", `repos/${repo}/branches/${branch}`, "--jq", ".name"]);
+      return true;
+    },
+    artifactUrl: (): string | undefined => {
+      const name = process.env.ARTIFACT_NAME;
+      const runId = process.env.GITHUB_RUN_ID;
+      if (!name || !runId) return undefined;
+      const id = gh(["api", `repos/${repo}/actions/runs/${runId}/artifacts`, "--jq", `.artifacts[] | select(.name == "${name}") | .id`]).trim();
+      return id ? `https://github.com/${repo}/actions/runs/${runId}/artifacts/${id}` : undefined;
+    },
+    addLabel: (on: { readonly kind: "issue" | "pr"; readonly number: string }, label: string) => subject(on, ["--add-label", label]),
+    removeLabel: (on: { readonly kind: "issue" | "pr"; readonly number: string }, label: string) => subject(on, ["--remove-label", label]),
+    // A body-file, not --body: an escalation comment carries the failing output and can outrun the arg limit.
+    comment: (on: { readonly kind: "issue" | "pr"; readonly number: string }, body: string) => {
+      const file = nodePath.join(os.tmpdir(), `retry-comment-${on.kind}-${on.number}-${process.pid}-${Date.now()}.md`);
+      fs.writeFileSync(file, body);
+      gh([on.kind, "comment", on.number, "--repo", repo, "--body-file", file], writeEnv);
+    },
+    ensureRetryLabel: (label: string) =>
+      gh(["label", "create", label, "--repo", repo, "--color", "c5def5", "--description", "Factory: retries used on this ticket", "--force"], writeEnv),
+    closePr: (number: string, comment: string) => gh(["pr", "close", number, "--repo", repo, "--comment", comment], writeEnv),
+    disarmAutoMerge: (number: string) => gh(["pr", "merge", number, "--repo", repo, "--disable-auto"], writeEnv),
   };
 };
