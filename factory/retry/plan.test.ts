@@ -219,6 +219,23 @@ test("an escalation leaves a PR the factory did not author open, parked and disa
   assert.match(record, /PR #12 is left open/);
 });
 
+test("an escalation with no ticket takes each label off its PR once", () => {
+  // The record is the PR itself, so both label reads name the same thread and
+  // both happen before either write: the record arm must not re-plan the
+  // removals the PR arm already planned, on a PR it has just closed.
+  const effects = planFor(
+    { decision: escalated, target: { issue: undefined, pr: factoryPr }, config, failure },
+    reads({ labelsOf: () => ["agent:review"] }),
+  );
+  assert.deepEqual(lines(effects), [
+    "remove-label pr#12 agent:review",
+    "close-pr pr#12",
+    `add-label pr#12 ${ESCALATION_LABEL}`,
+    "comment pr#12",
+    "log",
+  ]);
+});
+
 test("only the escalation arm pays for the escalation's reads", () => {
   const asked: string[] = [];
   const counting = reads({

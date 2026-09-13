@@ -358,7 +358,9 @@ const prNote = (escalatedPr: EscalatedPr | undefined): string =>
  * reads the comment wants are asked for here, so an arm that escalates nothing
  * never pays for them. Asking before the first write rather than as the comment
  * is rendered is the same answer: closing a PR keeps its branch, and neither the
- * branch nor the uploaded log moves for anything this arm writes.
+ * branch nor the uploaded log moves for anything this arm writes. The label read
+ * is the one that does move under this arm's own writes, so the record arm
+ * subtracts what the PR arm already planned to take off.
  */
 const escalateEffects = (
   config: RetryConfig,
@@ -370,9 +372,15 @@ const escalateEffects = (
   const openPr = target.pr;
   const effects: Effect[] = [];
   let escalatedPr: EscalatedPr | undefined;
+  // What the PR arm above already took off, so the record arm does not ask for
+  // the same removal twice when the record *is* that PR (no ticket was found).
+  // Both label reads happen before either write, so the second one cannot see
+  // the first's removals the way the pre-plan handler's did.
+  let removedFromPr: readonly string[] = [];
   if (openPr) {
     const on = prSubject(openPr);
     const { remove, add, close } = prEscalation({ ...openPr.facts, labels: reads.labelsOf(on) });
+    removedFromPr = remove;
     for (const label of remove) effects.push({ kind: "remove-label", on, label });
     if (add) effects.push({ kind: "park-pr", number: openPr.number, label: add });
     if (close) {
@@ -389,7 +397,8 @@ const escalateEffects = (
     escalatedPr = { number: openPr.number, closed: close };
   }
   const on = recordOn(target);
-  const labels = escalationLabels(reads.labelsOf(on));
+  const carried = reads.labelsOf(on).filter((label) => on.kind !== "pr" || !removedFromPr.includes(label));
+  const labels = escalationLabels(carried);
   for (const label of labels.remove) effects.push({ kind: "remove-label", on, label });
   // The record: the label and the comment that must not be lost.
   effects.push({ kind: "add-label", on, label: labels.add });
