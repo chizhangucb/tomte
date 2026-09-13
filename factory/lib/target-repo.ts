@@ -62,7 +62,7 @@ import { GhError, gh } from "./gh.ts";
  */
 const withKey = (name: "FACTORY_PAT" | "READ_TOKEN"): NodeJS.ProcessEnv => {
   const value = process.env[name];
-  if (!value) throw new Error(`Missing required env var ${name}. The old key names it replaced were dropped in #288, so the factory reads ${name} and nothing else here.`);
+  if (!value) throw new Error(`Missing required env var ${name}: the old fallback names were dropped in #288, so set ${name}.`);
   return { ...process.env, GH_TOKEN: value };
 };
 
