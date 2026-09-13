@@ -28,7 +28,7 @@ const workflowsDir = new URL(".github/workflows/", repoRoot);
 const STRIP_TYPES_ENTRYPOINTS = [
   { workflow: "dispatch.yml", job: "dispatch", entrypoint: "factory/dispatch/dispatch.ts" },
   { workflow: "dispatch.yml", job: "dispatch", entrypoint: "factory/dispatch/sweep-run.ts" },
-  { workflow: "update-branch.yml", job: "update", entrypoint: "factory/update-branch/update-branch.ts" },
+  { workflow: "update-branch.yml", job: "update", entrypoint: "factory/update-branch/update-branch-run.ts" },
   { workflow: "agent-audit.yml", job: "decide", entrypoint: "factory/audit/decide.ts" },
   { workflow: "agent-implement.yml", job: "implement", entrypoint: "factory/lib/preflight.ts" },
 ] as const;
