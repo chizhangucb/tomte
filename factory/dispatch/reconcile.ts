@@ -258,6 +258,23 @@ export const runsFor = (
     ? runs.filter((r) => r.event === "issues" && r.title.trim() === subject.title.trim())
     : runs.filter((r) => r.event === "pull_request_target" && r.headBranch === subject.headRef);
 
+/**
+ * A subject's runs that could cover its state: those whose role consumes the
+ * state, plus any whose role is unread. An unread role counts as covering while
+ * live, the sweep's soft-fail direction (#307); this is the one place that rule
+ * lives, and the reader is asked for a role only for the subject's own runs.
+ */
+const coveringRuns = (
+  subject: { kind: "issue"; title: string } | { kind: "pr"; headRef: string },
+  runs: readonly Run[],
+  readRole: RoleReader,
+  consumes: (role: RunRole) => boolean,
+): Run[] =>
+  runsFor(subject, runs).filter((r) => {
+    const role = readRole(r);
+    return role === undefined || consumes(role);
+  });
+
 const isUpdateBranchRun = (run: Run, base: string): boolean =>
   (run.event === "push" && run.headBranch === base) ||
   (run.event === "repository_dispatch" && run.title === UPDATE_BRANCH_EVENT);
@@ -419,10 +436,7 @@ const decideTicket = (t: TicketState, snap: Snapshot, deadlines: Deadlines, read
   const untouched = leftAloneDecision(subject, t.labels, deadlines.stuckMinutes, heldBy(t.labels, undefined));
   if (untouched) return untouched;
   const state = has("agent:in-progress") ? "agent:in-progress" : "agent:implement";
-  const runs = runsFor({ kind: "issue", title: t.title }, snap.runs).filter((r) => {
-    const role = readRole(r);
-    return role === undefined || role === "implement";
-  });
+  const runs = coveringRuns({ kind: "issue", title: t.title }, snap.runs, readRole, (role) => role === "implement");
   return decideStuck(
     { subject, state, since: t.stateSince, marks: t.marks, runs, expected: "implement run", labels: t.labels, add: "agent:implement" },
     snap,
@@ -442,10 +456,7 @@ const decidePrLabel = (p: PrState, snap: Snapshot, deadlines: Deadlines, held: s
   const subject: Subject = { kind: "pr", number: p.number };
   const untouched = leftAloneDecision(subject, p.labels, deadlines.stuckMinutes, held);
   if (untouched) return untouched;
-  const runs = runsFor({ kind: "pr", headRef: p.headRef }, snap.runs).filter((r) => {
-    const role = readRole(r);
-    return role === undefined || state.roles.includes(role);
-  });
+  const runs = coveringRuns({ kind: "pr", headRef: p.headRef }, snap.runs, readRole, (role) => state.roles.includes(role));
   return decideStuck(
     { subject, state: state.label, since: p.stateSince, marks: p.marks, runs, expected: state.expected, labels: p.labels, add: state.add, ticket: p.closes },
     snap,
