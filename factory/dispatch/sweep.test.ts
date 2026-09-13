@@ -211,6 +211,26 @@ test("a factory PR with auto-merge off past the deadline is re-armed", () => {
   assert.deepEqual(writes, [{ op: "armAutoMerge", pr: 11 }]);
 });
 
+test("a left-alone PR is decided without a single costly read (frugality, #302)", () => {
+  // The reconciler drives the reads, and it reaches a costly one only past the
+  // branches that would leave a PR alone. A draft PR and one carrying an agent
+  // label are each decided with no verdict, behind-by, commit-date or author read.
+  const reads: string[] = [];
+  const draft = openPr(21, { closes: 5, draft: true }, minutesAgo(45));
+  const labeled = openPr(31, { labels: ["agent:review"], stateSince: minutesAgo(1) }, minutesAgo(45));
+  const { needs, writes } = inMemory({
+    openPrs: () => [draft, labeled],
+    verdict: (sha) => (reads.push(`verdict:${sha.slice(0, 7)}`), "none" as VerdictState),
+    behindBy: () => (reads.push("behindBy"), 0),
+    commitDate: () => (reads.push("commitDate"), ""),
+    ticketAuthor: () => (reads.push("ticketAuthor"), { association: "OWNER", login: "owner" }),
+  });
+  const result = sweep(needs, config());
+  assert.equal(result.aborted, undefined);
+  assert.deepEqual(reads, []);
+  assert.deepEqual(writes, []);
+});
+
 test("a dry run decides but writes nothing", () => {
   const { needs, writes } = inMemory({ openTickets: () => [ticket(1)] });
   const result = sweep(needs, config({ dryRun: true }));
