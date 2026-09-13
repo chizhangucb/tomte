@@ -41,6 +41,7 @@ import {
   fetchPullRequestContext,
   noCriteriaReason,
 } from "../shared/review-context";
+import { prContextRepo } from "../../lib/pr-context-repo";
 import { trustPolicyFromEnv } from "../../lib/trusted-authors";
 import {
   filterInlineComments,
@@ -126,7 +127,7 @@ await runAgentWorkflow(
     // and passed down, so nothing between here and the prompt can widen it.
     const policy = trustPolicyFromEnv();
     console.log(`Trusted authors: ${policy.associations.join(", ")}.`);
-    const context = fetchPullRequestContext(PR_NUMBER, policy);
+    const context = fetchPullRequestContext(prContextRepo(), PR_NUMBER, policy);
     console.log(describeDropped(context.dropped));
     const criteria = parseAcceptanceCriteria(context.issueBody);
     const { model } = resolveRoleModel("reviewer", REVIEWER_MODEL);

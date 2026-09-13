@@ -3,8 +3,10 @@ import { test } from "node:test";
 
 import {
   describeDropped,
+  fetchPullRequestContext,
   noCriteriaReason,
   pullRequestContext,
+  type PrContextNeeds,
   type PullRequestContext,
   type PullRequestReads,
 } from "./review-context";
@@ -477,4 +479,75 @@ test("the job log names what was dropped, so a cut thread is visible without the
   assert.match(nothingDropped, /none/);
   // A kept body adds no sentence: the line is about what went, not what stayed.
   assert.doesNotMatch(nothingDropped, /ticket's own body/);
+});
+
+/**
+ * The shipped fetch, driven through its needs-record against an in-memory
+ * target repo and no network (#312), in the style of `dispatch/sweep.test.ts`.
+ * Everything above is the pure assembly's subject; this half is the function
+ * the three workflows actually call: which read it makes for which subject,
+ * and the context it builds out of the five answers.
+ */
+type Asked =
+  | { op: "pr" | "reviews" | "reviewThreads"; prNumber: string }
+  | { op: "linkedIssue"; issueNumber: string }
+  | { op: "diff" };
+
+/** An in-memory PR-context repo: the five reads answered from fixtures, each one recorded. */
+const inMemory = (
+  from: PullRequestReads = reads(),
+): { needs: PrContextNeeds; asked: Asked[] } => {
+  const asked: Asked[] = [];
+  const needs: PrContextNeeds = {
+    pr: (prNumber) => {
+      asked.push({ op: "pr", prNumber });
+      return from.pr;
+    },
+    linkedIssue: (issueNumber) => {
+      asked.push({ op: "linkedIssue", issueNumber });
+      // The real read throws on an API error rather than reading as "no ticket".
+      if (!from.issue) throw new Error(`no ticket #${issueNumber} in this repo`);
+      return from.issue;
+    },
+    reviews: (prNumber) => {
+      asked.push({ op: "reviews", prNumber });
+      return from.reviews;
+    },
+    reviewThreads: (prNumber) => {
+      asked.push({ op: "reviewThreads", prNumber });
+      return from.threads;
+    },
+    diff: () => {
+      asked.push({ op: "diff" });
+      return from.diff;
+    },
+  };
+  return { needs, asked };
+};
+
+test("the fetch assembles its five reads into the context the workflows read", () => {
+  const { needs, asked } = inMemory();
+  const context = fetchPullRequestContext(needs, "12", OWNER_ONLY);
+
+  assert.equal(context.prTitle, "Add a helper");
+  assert.equal(context.prBody, "Closes #4");
+  assert.equal(context.issueNumber, "4");
+  assert.equal(context.issueTitle, "Add a helper");
+  assert.equal(context.issueBody, "## Acceptance criteria\n\n- [ ] It helps");
+  assert.deepEqual(context.issueLabels, ["agent:implement", "model:claude-sonnet-5"]);
+  assert.match(context.linkedIssue, /Owner on the ticket\./);
+  assert.match(context.diff, /const helper = 1;/);
+  assert.ok(context.diffLines.get("a.ts")?.has(1));
+  assert.deepEqual([...context.validReplyIds], ["C1", "C4"]);
+  assert.match(context.prCommentsJson, /Owner on the PR\./);
+
+  // Every read is asked for the subject the caller named: the PR by its number,
+  // the ticket by the number its body links.
+  assert.deepEqual(asked, [
+    { op: "pr", prNumber: "12" },
+    { op: "linkedIssue", issueNumber: "4" },
+    { op: "reviews", prNumber: "12" },
+    { op: "reviewThreads", prNumber: "12" },
+    { op: "diff" },
+  ]);
 });

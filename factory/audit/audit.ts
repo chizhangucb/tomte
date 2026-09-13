@@ -32,6 +32,7 @@ import {
   fetchPullRequestContext,
   noCriteriaReason,
 } from "../agent-workflows/shared/review-context";
+import { prContextRepo } from "../lib/pr-context-repo";
 import { trustPolicyFromEnv } from "../lib/trusted-authors";
 import { runAgentWorkflow } from "../lib/run-agent-workflow";
 import { formatUsageComment } from "../lib/usage";
@@ -127,7 +128,7 @@ await runAgentWorkflow(
     // Whose words this run reads (story 27, ADR 0008), built once here.
     const policy = trustPolicyFromEnv();
     console.log(`Trusted authors: ${policy.associations.join(", ")}.`);
-    const context = fetchPullRequestContext(PR_NUMBER, policy, { diff });
+    const context = fetchPullRequestContext(prContextRepo(), PR_NUMBER, policy, { diff });
     console.log(describeDropped(context.dropped));
     const criteria = parseAcceptanceCriteria(context.issueBody);
     console.log(`Ticket #${context.issueNumber || "(none)"}: ${criteria.length} acceptance criteria.`);

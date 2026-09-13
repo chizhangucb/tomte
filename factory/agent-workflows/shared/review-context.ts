@@ -24,13 +24,16 @@
  *   reviewer's acceptance criteria and the audit's, the dispatcher's own author
  *   check is on neither path, and gh's `--json` view has no `authorAssociation`
  *   to filter on, so the association comes from a second REST read (#179).
+ * - the five reads behind a needs record, `PrContextNeeds`, handed in from
+ *   outside instead of made here: `lib/pr-context-repo.ts` in production, an
+ *   in-memory PR-context repo in `review-context.test.ts`. The `gh`, GraphQL
+ *   and git calls that were in this file went with it, so the fetch's own
+ *   assembly of the five answers is what a test can drive (#312).
  * - the ticket read asks for `labels` as well, and `issueLabels` carries them on
  *   the context: #10's rule is that a `model:` label on the ticket moves the
  *   implementer, and implement-pr read that list off the PR (#119). The subject
  *   swapped on the read that was already there rather than a second one.
  */
-import { gh } from "../../lib/gh";
-import { safeSh, sh } from "../../lib/sh";
 import { parseDiffLines } from "./diff-lines";
 import { linkedIssueNumber } from "../../lib/linked-issue";
 import { renderIssue, type IssueView } from "../../lib/ticket-context";
@@ -141,13 +144,16 @@ export interface LinkedIssueRead {
   readonly author: Author;
 }
 
+/** The pull request itself, as `gh pr view --json title,body,comments` returns it. */
+export interface PullRequestRead {
+  readonly title: string;
+  readonly body?: string | null;
+  readonly comments: readonly PullRequestComment[];
+}
+
 /** The five reads `fetchPullRequestContext` makes, before any judgement. */
 export interface PullRequestReads {
-  readonly pr: {
-    readonly title: string;
-    readonly body?: string | null;
-    readonly comments: readonly PullRequestComment[];
-  };
+  readonly pr: PullRequestRead;
   /** The linked ticket, or undefined when the PR body links none. */
   readonly issue: LinkedIssueRead | undefined;
   readonly reviews: readonly PullRequestReview[];
@@ -155,32 +161,32 @@ export interface PullRequestReads {
   readonly diff: string;
 }
 
-const REVIEW_THREADS_QUERY = `
-query($owner:String!,$repo:String!,$number:Int!) {
-  repository(owner:$owner,name:$repo) {
-    pullRequest(number:$number) {
-      reviewThreads(first:100) {
-        nodes {
-          id
-          isResolved
-          isOutdated
-          comments(first:50) {
-            nodes {
-              id
-              path
-              line
-              originalLine
-              body
-              authorAssociation
-              author { login }
-            }
-          }
-        }
-      }
-    }
-  }
-}`;
-
+/**
+ * Everything `fetchPullRequestContext` needs from the target repo (#312): the
+ * five reads above as named domain reads, never a raw `gh` call, handed in from
+ * outside. `lib/pr-context-repo.ts` is the production record and an in-memory
+ * one drives the fetch in a test, the way the sweep's `Needs` is wired
+ * (docs/factory/layout.md, "How a script is wired").
+ *
+ * Its own record, not the retry handler's: these reads answer what one PR and
+ * its ticket say, where the retry handler's answer what state a run left behind.
+ *
+ * Every read throws on an API error, as `lib/gh.ts` does. Which of those a
+ * caller may shrug off would be the caller's own policy; the fetch shrugs off
+ * none, because a body that failed to read must never arrive as "no criteria".
+ */
+export interface PrContextNeeds {
+  /** The PR under review: its title, its body, and its top-level comments. */
+  readonly pr: (prNumber: string) => PullRequestRead;
+  /** The ticket the PR body links, and whoever opened it. Asked only when there is one. */
+  readonly linkedIssue: (issueNumber: string) => LinkedIssueRead;
+  /** The PR's submitted reviews, whose summaries are a channel of their own. */
+  readonly reviews: (prNumber: string) => readonly PullRequestReview[];
+  /** The PR's review threads, the inline half of the same conversation. */
+  readonly reviewThreads: (prNumber: string) => readonly PullRequestReviewThread[];
+  /** The branch's diff to the base, for a caller that does not bring its own. */
+  readonly diff: () => string;
+}
 
 /**
  * One line per run naming what the policy took out, so a cut thread is visible
@@ -391,94 +397,33 @@ export const pullRequestContext = (
 };
 
 /**
- * The linked ticket and whoever opened it, with the job's gh token.
+ * The context an agent gets for one PR: the five reads made through the record
+ * it was handed, then the pure assembly above under the same trust policy.
  *
- * Two reads, because they carry different things and both are needed. gh's
- * `--json` view gives the title, the criteria, the comments with the
- * association the policy filters on, and the labels, which decide the
- * implementer's model (#119); it has no `authorAssociation` field for the
- * ticket itself, so it cannot say whose ticket this is. REST does, on
- * `author_association`, and that is the field the `ticket-author` channel is
- * judged on everywhere else (`dispatch/select.ts`).
- *
- * Both throw on an API error, since a missing body must never read as "no
- * criteria", and a missing author must never read as a trusted one.
+ * The record is a required argument and comes first, the way every other needs
+ * record in the factory is passed (`sweep`, `waitForChecks`): a fetch that
+ * could fall back to a `gh` call of its own is one no test crosses.
  */
-const readLinkedIssue = (issueNumber: string): LinkedIssueRead => {
-  const view = JSON.parse(
-    gh(["issue", "view", issueNumber, "--json", "number,title,body,comments,labels"]),
-  ) as IssueView;
-  const rest = JSON.parse(
-    gh(["api", `repos/{owner}/{repo}/issues/${issueNumber}`]),
-  ) as {
-    author_association?: string | null;
-    user?: { login?: string | null } | null;
-  };
-  return {
-    view,
-    author: { association: rest.author_association, login: rest.user?.login },
-  };
-};
-
 export const fetchPullRequestContext = (
+  needs: PrContextNeeds,
   prNumber: string,
   policy: TrustPolicy,
   options: {
-    /** The diff to judge; defaults to the branch's diff to main. The audit passes the merged commit's. */
+    /** The diff to judge; defaults to the record's. The audit passes the merged commit's. */
     readonly diff?: string;
   } = {},
 ): PullRequestContext => {
-  const prView = JSON.parse(
-    gh(["pr", "view", prNumber, "--json", "title,body,comments"]),
-  ) as {
-    title: string;
-    body?: string | null;
-    comments: PullRequestComment[];
-  };
-
-  const issueNumber = linkedIssueNumber(prView.body);
-  const issue = issueNumber ? readLinkedIssue(issueNumber) : undefined;
-
-  const reviews = JSON.parse(
-    gh(["api", `repos/{owner}/{repo}/pulls/${prNumber}/reviews`]),
-  ) as PullRequestReview[];
-
-  const [owner, repo] = (process.env.GH_REPO ?? "").split("/");
-
-  const threadsParsed = JSON.parse(
-    gh([
-      "api",
-      "graphql",
-      "-F",
-      `owner=${owner}`,
-      "-F",
-      `repo=${repo}`,
-      "-F",
-      `number=${prNumber}`,
-      "-f",
-      `query=${REVIEW_THREADS_QUERY}`,
-    ]),
-  ) as {
-    data?: {
-      repository?: {
-        pullRequest?: {
-          reviewThreads?: { nodes?: PullRequestReviewThread[] };
-        };
-      };
-    };
-  };
-
-  const diff =
-    options.diff ?? (safeSh("git diff main...HEAD") || sh("git diff main..HEAD"));
+  const pr = needs.pr(prNumber);
+  const issueNumber = linkedIssueNumber(pr.body);
 
   return pullRequestContext(
     {
-      pr: prView,
-      issue,
-      reviews,
-      threads:
-        threadsParsed.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [],
-      diff,
+      pr,
+      // No linked ticket is no read: a PR that closes none has no ticket to ask for.
+      issue: issueNumber ? needs.linkedIssue(issueNumber) : undefined,
+      reviews: needs.reviews(prNumber),
+      threads: needs.reviewThreads(prNumber),
+      diff: options.diff ?? needs.diff(),
     },
     policy,
   );

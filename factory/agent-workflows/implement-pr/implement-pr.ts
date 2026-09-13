@@ -53,6 +53,7 @@ import { required } from "../../lib/env";
 import { fail, writeJson, writeText } from "../../lib/run-output";
 import { resolveRoleModel } from "../../lib/model";
 import { describeDropped, fetchPullRequestContext } from "../shared/review-context";
+import { prContextRepo } from "../../lib/pr-context-repo";
 import { trustPolicyFromEnv } from "../../lib/trusted-authors";
 import {
   filterInlineComments,
@@ -101,7 +102,7 @@ await runAgentWorkflow(
     // target's own policy rather than a default of their own.
     const policy = trustPolicyFromEnv();
     console.log(`Trusted authors: ${policy.associations.join(", ")}.`);
-    const context = fetchPullRequestContext(PR_NUMBER, policy);
+    const context = fetchPullRequestContext(prContextRepo(), PR_NUMBER, policy);
     console.log(describeDropped(context.dropped));
 
     // #10's rule is a label on the ticket, so the labels come off the linked
