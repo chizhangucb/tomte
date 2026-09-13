@@ -50,8 +50,10 @@ jobs:
           # strip-types-cone.test.ts pins this list to what the entry reaches.
           sparse-checkout: |
             factory/update-branch
+            factory/dispatch/dispatch.ts
             factory/dispatch/gh-read.ts
             factory/dispatch/reconcile.ts
+            factory/dispatch/select.ts
             factory/dispatch/sweep.ts
             factory/lib/errors.ts
             factory/lib/factory-pr.ts
@@ -60,6 +62,7 @@ jobs:
             factory/lib/linked-issue.ts
             factory/lib/target-repo.ts
             factory/lib/trusted-authors.ts
+            factory/lib/verdict.ts
             factory/retry/escalation.ts
 
       - name: Setup Node.js

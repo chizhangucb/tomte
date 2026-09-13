@@ -192,7 +192,7 @@ const workflowsDir = new URL("../../.github/workflows/", import.meta.url);
 
 /** Every workflow whose script builds a trust policy, and the script it runs. */
 const POLICY_WORKFLOWS = {
-  "dispatch.yml": "dispatch/dispatch.ts",
+  "dispatch.yml": "dispatch/dispatch-run.ts",
   "agent-implement.yml": "agent-workflows/implement/implement.ts",
   "agent-review.yml": "agent-workflows/review/review.ts",
   "agent-implement-pr.yml": "agent-workflows/implement-pr/implement-pr.ts",
