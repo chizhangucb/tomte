@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { targetRepo } from "./target-repo.ts";
+import { dispatchNeeds, targetRepo } from "./target-repo.ts";
 
 /**
  * The key choice lives here and nowhere else (#281), and #288 is the contract
@@ -110,4 +110,9 @@ test("the old names are inert when the new ones are set: FACTORY_PAT and READ_TO
   wireKeys({ FACTORY_PAT: "pat-write", GH_TOKEN: "gh-write", READ_TOKEN: "read", STATUS_TOKEN: "status-read" });
   assert.equal(writeKeyOf(), "pat-write");
   assert.equal(readKeyOf(), "read");
+});
+
+test("the dispatcher builds with the writing key alone: every read uses it, so no READ_TOKEN is required", () => {
+  wireKeys({ FACTORY_PAT: "pat-write" });
+  assert.doesNotThrow(() => dispatchNeeds("owner/repo"));
 });
