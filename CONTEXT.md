@@ -77,6 +77,10 @@ _Avoid_: requeue (the retry handler's other no-retry path: a ticket goes back to
 The retry handler's answer to a failed attempt on a **hold** (#185): `hold` on the ticket or its open PR, so no agent is started, no retry is spent and nothing is escalated. A comment names the label and the subject it was found on, and the subject is left where a **requeue** leaves one, so taking the hold off resumes it through the sweep that owns it. Read before every other answer but an escalation already made, the retry cap included.
 _Avoid_: requeue (not the ticket's failure, and nobody holding it), escalation (the factory giving up, where here a person has taken the wheel), parked (the factory's own pair).
 
+**Effect**:
+One thing the retry handler does, as a value: a small tagged record naming a comment, a label write, a close, a disarm or the requeue marker file, and the subject it lands on. `planFor` in `factory/retry/plan.ts` (#310) turns a decision into the ordered list of them, and the handler applies that list in order and chooses nothing else; each effect names what its write is *for*, never whether a refusal of it may be swallowed, which stays the handler's apply-time policy.
+_Avoid_: plan for one of them (the plan is the whole ordered list, and `factory/update-branch/plan.ts` already names one PR's answer a `Plan`), action (the reconciler's word for one repair it makes), command.
+
 **Tell-author**:
 The hand-off's counterpart on a PR the factory did not author (#180): the same comment naming the conflict, then `agent:blocked` instead of `agent:implement`, because merging the base in and pushing someone else's branch is not the factory's to do. The label is what makes it stick, holding the PR through the next push to `main` here and, on a PR the reviewer has judged, parking it at the reconciler too, and the author taking it off is what hands the PR back. Updates are untouched either way.
 

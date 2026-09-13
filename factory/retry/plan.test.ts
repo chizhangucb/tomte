@@ -232,3 +232,16 @@ test("only the escalation arm pays for the escalation's reads", () => {
   planFor({ decision: escalated, target: { issue: "7", pr: factoryPr }, config, failure }, counting);
   assert.deepEqual(asked, ["labelsOf pr", "labelsOf issue", "artifactUrl", "branchExists"]);
 });
+
+test("a hand-off with no mergeability read names no PR and writes nothing", () => {
+  // `decide` answers hand-off only from a mergeability it was given, and one is
+  // given only from a read, so this is a state it cannot reach. What used to be
+  // a throw in the handler is a line in the plan (#310): there is no PR named
+  // and no base to merge, so the plan writes nothing rather than guessing.
+  const effects = planFor(
+    { decision: { action: "hand-off", reason: CONFLICT_REASON }, target: { issue: "7", pr: factoryPr }, config, failure },
+    reads(),
+  );
+  assert.deepEqual(lines(effects), ["log"]);
+  assert.match(effects[0]!.kind === "log" ? effects[0]!.line : "", /no mergeability read/);
+});

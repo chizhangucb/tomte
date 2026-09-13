@@ -89,6 +89,14 @@ export interface RetryConfig {
  * ordered and the handler applies it in order, so "the start label goes on
  * last, once the context the next run reads is in place" is a fact about the
  * plan rather than about the shape of the code that applies it.
+ *
+ * Named by purpose and never by policy: no effect says whether a refusal of it
+ * may be swallowed, and the handler decides that from what the write is for. So
+ * the parking label on a PR the factory is walking away from is `park-pr` rather
+ * than an `add-label` carrying a flag, and a courtesy note is a `note` rather
+ * than a `comment` carrying one. The three effects that name a PR by number
+ * (`park-pr`, `close-pr`, `disarm-auto-merge`) are the three whose write is a
+ * PR's alone, as `RetryNeeds` numbers them.
  */
 export type Effect =
   /** The record of what happened, on the thread that must carry it. */
@@ -106,13 +114,23 @@ export type Effect =
   | { readonly kind: "disarm-auto-merge"; readonly number: string }
   /** The marker file a requeued or stood-down PR leaves for the workflow steps that would drop its label (#148). */
   | { readonly kind: "mark-requeued"; readonly reason: string }
-  /** What the job log says the handler did. Planned with the writes so no line is derived a second time from the verb. */
+  /**
+   * What the job log says the handler did. Planned with the writes so no line
+   * is derived a second time from the verb. The handler still logs what is its
+   * own rather than an arm's: the subject it fell back to when the PR closed
+   * mid-wait, and the decision it just read out of `decide`.
+   */
   | { readonly kind: "log"; readonly line: string };
 
 /**
  * The costly reads only some arms make, one GitHub call each, asked for at the
  * arm that needs them the way the reconciler asks for its merge reads (#302,
- * #307): a retry or a requeue makes none of them. The handler passes readers
+ * #307): a retry or a requeue makes none of them, and only the escalation pays
+ * for the branch and the log its comment names. Injected rather than made here,
+ * which is how this repo keeps a rule pure while it still consults a fact it
+ * cannot compute (`findVerdict` in `update-branch/plan.ts` takes its lookups the
+ * same way): the plan is a function of the verb, the target, the config and the
+ * failure, and the reader is how those reach it. The handler passes readers
  * backed by its `RetryNeeds` record, with its own soft-fail policy behind them.
  */
 export interface PlanReads {
@@ -181,7 +199,7 @@ const tellAuthor = (
 ];
 
 /** The retry (#16): the record on whatever carries it, the count, then the label that starts the next run. */
-const retryEffects = (config: RetryConfig, target: Target, retryNumber: number, failure: Failure): Effect[] => {
+const retryEffects = (config: RetryConfig, target: Target, failure: Failure, retryNumber: number): Effect[] => {
   const label = retryLabel(retryNumber);
   const fix = target.pr ? prDisposition(target.pr.facts) : undefined;
   // The record goes on whatever the retry hands the fix to: the attempt was
@@ -280,8 +298,8 @@ const requeueEffects = (config: RetryConfig, target: Target, reason: string): Ef
 const standDownEffects = (
   config: RetryConfig,
   target: Target,
-  { hold, reason }: { readonly hold: Hold; readonly reason: string },
   failure: Failure,
+  { hold, reason }: { readonly hold: Hold; readonly reason: string },
 ): Effect[] => {
   const resume = actOn(target);
   const pr = resume.kind === "pr" ? resume.number : undefined;
@@ -338,13 +356,15 @@ const prNote = (escalatedPr: EscalatedPr | undefined): string =>
  * the factory authored it and disarmed and parked when it did not, then the
  * record, which is the label and the comment a human reads. The branch and log
  * reads the comment wants are asked for here, so an arm that escalates nothing
- * never pays for them.
+ * never pays for them. Asking before the first write rather than as the comment
+ * is rendered is the same answer: closing a PR keeps its branch, and neither the
+ * branch nor the uploaded log moves for anything this arm writes.
  */
 const escalateEffects = (
   config: RetryConfig,
   target: Target,
-  reason: string,
   failure: Failure,
+  reason: string,
   reads: PlanReads,
 ): Effect[] => {
   const openPr = target.pr;
@@ -411,9 +431,9 @@ const escalateEffects = (
  * `PlanReads`, which the handler backs with its record.
  */
 export const planFor = ({ decision, target, config, failure }: PlanInput, reads: PlanReads): Effect[] => {
-  if (decision.action === "stand-down") return standDownEffects(config, target, decision, failure);
-  if (decision.action === "retry") return retryEffects(config, target, decision.retry, failure);
-  if (decision.action === "escalate") return escalateEffects(config, target, decision.reason, failure, reads);
+  if (decision.action === "stand-down") return standDownEffects(config, target, failure, decision);
+  if (decision.action === "retry") return retryEffects(config, target, failure, decision.retry);
+  if (decision.action === "escalate") return escalateEffects(config, target, failure, decision.reason, reads);
   if (decision.action === "requeue") return requeueEffects(config, target, decision.reason);
   if (decision.action === "hand-off") {
     // `decide` answers hand-off only from a mergeability it was given, and one

@@ -261,7 +261,7 @@ const safeArtifactUrl = (needs: RetryNeeds): string | undefined => {
  * rather than the escalation.
  */
 const planReads = (needs: RetryNeeds): PlanReads => ({
-  labelsOf: (on) => needs.labelsOf(on),
+  labelsOf: needs.labelsOf,
   branchExists: () => safeBranchExists(needs),
   artifactUrl: () => safeArtifactUrl(needs),
 });
