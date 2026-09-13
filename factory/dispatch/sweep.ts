@@ -170,16 +170,14 @@ export const sweep = (needs: Needs, config: SweepConfig): SweepResult => {
   /**
    * The costly merge-state facts the reconciler asks for, backed by the Needs
    * record and lazy: each fires only when the reconciler reaches the branch that
-   * consults it (#302), so it stopped being this script's job to pre-walk which
-   * PRs to read for. A PR the reconciler leaves alone before that branch reads
-   * nothing; a factory PR is never asked for its ticket author, an unarmed one
-   * never for its verdict, and so on, exactly as the decision's own order says.
+   * consults it (#302), so pre-walking which PRs to read for is no longer this
+   * script's job. A PR left alone before that branch reads nothing.
    *
    * The soft-fail reads keep this script's policy behind them: an unreadable
    * ticket author (#182) or comment thread (#230) leaves the fact unknown, the
    * direction the reconciler does less on, rather than aborting. The hard reads
    * (verdict, behind-by, and the head commit date behind `headSince`) throw
-   * `GhError`, which the abort guard below turns into one aborted pass.
+   * `GhError`, which the abort path below turns into one aborted pass.
    */
   const mergeReads = (createdAt: ReadonlyMap<number, string>): MergeReads => ({
     verdict: (pr) => needs.verdict(pr.headSha),
@@ -223,8 +221,8 @@ export const sweep = (needs: Needs, config: SweepConfig): SweepResult => {
 
   /* A failed hard read aborts the pass: a partial snapshot, or a costly read the
      reconciler could not make, would read as stranded subjects and repair them
-     wrongly. The reconciler's own merge-state reads happen inside this guard too,
-     so a hard one that throws aborts here rather than crashing mid-decision. */
+     wrongly. The reconciler's own merge-state reads run inside this try too, so a
+     hard one that throws aborts here rather than crashing mid-decision. */
   let snapshot: Snapshot;
   let decisions: readonly Decision[];
   try {
