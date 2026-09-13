@@ -1,4 +1,4 @@
-import { gh } from "../agent-workflows/shared/common";
+import { gh } from "./gh";
 import { authorAssociation, type AuthorAssociation, type TrustPolicy } from "./trusted-authors";
 
 /**

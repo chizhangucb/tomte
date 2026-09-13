@@ -43,21 +43,15 @@
  *   it, which is what puts this file at 26 of his 28 lines.
  *   `extraction.md` stays his to the line: it is a format contract, not prose,
  *   so neither writing pass touched it.
+ * - the run goes through `lib/run-agent-workflow.ts` (#313): rotation, the
+ *   config dir per account, `noSandbox()`, the prompt file, the plugin install
+ *   per attempt and the failure-to-`fail` `try`/`catch` are the one shell's,
+ *   not copied here. His extraction run is inside it.
  */
 import { spawnSync } from "node:child_process";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as sandcastle from "@ai-hero/sandcastle";
-import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
-import { runWithRotation } from "../../lib/accounts";
-import {
-  fail,
-  required,
-  writeJson,
-  writeText,
-} from "../shared/common";
+import { required } from "../../lib/env";
+import { fail, writeJson, writeText } from "../../lib/run-output";
 import { resolveRoleModel } from "../../lib/model";
-import { installPluginsForAttempt } from "../../lib/plugins";
 import { describeDropped, fetchPullRequestContext } from "../shared/review-context";
 import { trustPolicyFromEnv } from "../../lib/trusted-authors";
 import {
@@ -65,7 +59,7 @@ import {
   filterReplies,
   implementPrOutputSchema,
 } from "../shared/review-output";
-import { runWithExtraction } from "../shared/run-with-extraction";
+import { runAgentWorkflow } from "../../lib/run-agent-workflow";
 import { retrySectionForRun } from "../../retry/context";
 import { conflictSection, parseMergeTreeConflicts } from "../../lib/conflicts";
 
@@ -92,40 +86,41 @@ const detectConflicts = (): readonly string[] => {
   });
 };
 
-try {
-  // Whose words this run reads (story 27, ADR 0008): built once here
-  // and passed to the PR context and the retry marker alike, so both follow the
-  // target's own policy rather than a default of their own.
-  const policy = trustPolicyFromEnv();
-  console.log(`Trusted authors: ${policy.associations.join(", ")}.`);
-  const context = fetchPullRequestContext(PR_NUMBER, policy);
-  console.log(describeDropped(context.dropped));
+await runAgentWorkflow(
+  {
+    name: `implement-pr-${PR_NUMBER}`,
+    runName: `implement-pr-${PR_NUMBER}`,
+    role: "implementer",
+    dir: import.meta.dirname,
+    plugins: true,
+    extract: implementPrOutputSchema,
+  },
+  async (run) => {
+    // Whose words this run reads (story 27, ADR 0008): built once here
+    // and passed to the PR context and the retry marker alike, so both follow the
+    // target's own policy rather than a default of their own.
+    const policy = trustPolicyFromEnv();
+    console.log(`Trusted authors: ${policy.associations.join(", ")}.`);
+    const context = fetchPullRequestContext(PR_NUMBER, policy);
+    console.log(describeDropped(context.dropped));
 
-  // #10's rule is a label on the ticket, so the labels come off the linked
-  // ticket the context above already read, never off this PR (#119). A PR that
-  // links no ticket has nothing to override the configured default with.
-  const { model, source } = resolveRoleModel("implementer", IMPLEMENTER_MODEL, context.issueLabels);
-  const labelSubject = context.issueNumber ? `ticket #${context.issueNumber}` : "no linked ticket";
-  console.log(`Implementer model: ${model} (from ${source}, labels from ${labelSubject}).`);
-  // A retry (#16) carries the failing verdict or check log on the linked ticket.
-  const retrySection = retrySectionForRun(context.issueNumber || undefined, policy);
-  const conflicts = detectConflicts();
-  console.log(
-    conflicts.length === 0
-      ? `No conflict with ${BASE_BRANCH}.`
-      : `Conflicts with ${BASE_BRANCH} (${conflicts.join(", ")}): the prompt asks the agent to merge and resolve first.`,
-  );
+    // #10's rule is a label on the ticket, so the labels come off the linked
+    // ticket the context above already read, never off this PR (#119). A PR that
+    // links no ticket has nothing to override the configured default with.
+    const { model, source } = resolveRoleModel("implementer", IMPLEMENTER_MODEL, context.issueLabels);
+    const labelSubject = context.issueNumber ? `ticket #${context.issueNumber}` : "no linked ticket";
+    console.log(`Implementer model: ${model} (from ${source}, labels from ${labelSubject}).`);
+    // A retry (#16) carries the failing verdict or check log on the linked ticket.
+    const retrySection = retrySectionForRun(context.issueNumber || undefined, policy);
+    const conflicts = detectConflicts();
+    console.log(
+      conflicts.length === 0
+        ? `No conflict with ${BASE_BRANCH}.`
+        : `Conflicts with ${BASE_BRANCH} (${conflicts.join(", ")}): the prompt asks the agent to merge and resolve first.`,
+    );
 
-  const result = await runWithRotation(`implement-pr-${PR_NUMBER}`, model, (agent, log) => {
-    // Each account runs in its own config dir, so the skills the prompt
-    // invokes by name go into the dir of the account this attempt uses.
-    installPluginsForAttempt(agent.env.CLAUDE_CONFIG_DIR);
-    return runWithExtraction({
-      name: `implement-pr-${PR_NUMBER}`,
-      agent,
-      sandbox: noSandbox(),
-      logging: log.logging,
-      promptFile: path.join(import.meta.dirname, "prompt.md"),
+    const result = await run({
+      model,
       promptArgs: {
         PR_NUMBER,
         BRANCH,
@@ -138,59 +133,49 @@ try {
         RETRY_SECTION: retrySection,
         CONFLICT_SECTION: conflictSection(BASE_BRANCH, conflicts),
       },
-      output: sandcastle.Output.object({
-        tag: "output",
-        schema: implementPrOutputSchema,
-      }),
-      extractionPrompt: fs.readFileSync(
-        path.join(import.meta.dirname, "extraction.md"),
-        "utf8",
-      ),
     });
-  }, { role: "implementer" });
 
-  const threadReplies = filterReplies(
-    result.output.threadReplies,
-    context.validReplyIds,
-  );
-  const newInlineComments = filterInlineComments(
-    result.output.newInlineComments,
-    context.diffLines,
-  );
-  const hasCommits = result.commits.length > 0;
+    const threadReplies = filterReplies(
+      result.output.threadReplies,
+      context.validReplyIds,
+    );
+    const newInlineComments = filterInlineComments(
+      result.output.newInlineComments,
+      context.diffLines,
+    );
+    const hasCommits = result.commits.length > 0;
 
-  // A conflict the agent left in place must fail the run, or the hand-off would loop:
-  // review passes the unchanged head, update-branch conflicts again, hands off again.
-  if (conflicts.length > 0) {
-    const remaining = detectConflicts();
-    if (remaining.length > 0) {
-      fail(`Branch still conflicts with ${BASE_BRANCH} after the run (${remaining.join(", ")}); the merge was not resolved.`);
+    // A conflict the agent left in place must fail the run, or the hand-off would loop:
+    // review passes the unchanged head, update-branch conflicts again, hands off again.
+    if (conflicts.length > 0) {
+      const remaining = detectConflicts();
+      if (remaining.length > 0) {
+        fail(`Branch still conflicts with ${BASE_BRANCH} after the run (${remaining.join(", ")}); the merge was not resolved.`);
+      }
+      console.log(`Conflict with ${BASE_BRANCH} resolved on the branch.`);
     }
-    console.log(`Conflict with ${BASE_BRANCH} resolved on the branch.`);
-  }
 
-  if (
-    !hasCommits &&
-    threadReplies.length === 0 &&
-    newInlineComments.length === 0 &&
-    result.output.topLevelComments.length === 0
-  ) {
-    fail("Agent finished but made no commits and emitted no comments.");
-  }
+    if (
+      !hasCommits &&
+      threadReplies.length === 0 &&
+      newInlineComments.length === 0 &&
+      result.output.topLevelComments.length === 0
+    ) {
+      fail("Agent finished but made no commits and emitted no comments.");
+    }
 
-  writeText("has_commits.txt", hasCommits ? "true" : "false");
-  writeJson("implement_thread_replies.json", threadReplies);
-  writeJson("implement_new_inline_comments.json", newInlineComments);
-  writeJson(
-    "implement_top_level_comments.json",
-    result.output.topLevelComments,
-  );
+    writeText("has_commits.txt", hasCommits ? "true" : "false");
+    writeJson("implement_thread_replies.json", threadReplies);
+    writeJson("implement_new_inline_comments.json", newInlineComments);
+    writeJson(
+      "implement_top_level_comments.json",
+      result.output.topLevelComments,
+    );
 
-  console.log("Implement PR complete.");
-  console.log(`Commits: ${result.commits.length}.`);
-  console.log(`Thread replies: ${threadReplies.length}.`);
-  console.log(`Inline comments: ${newInlineComments.length}.`);
-  console.log(`Top-level comments: ${result.output.topLevelComments.length}.`);
-} catch (error) {
-  fail(error instanceof Error ? error.message : String(error));
-}
+    console.log("Implement PR complete.");
+    console.log(`Commits: ${result.commits.length}.`);
+    console.log(`Thread replies: ${threadReplies.length}.`);
+    console.log(`Inline comments: ${newInlineComments.length}.`);
+    console.log(`Top-level comments: ${result.output.topLevelComments.length}.`);
+  },
+);

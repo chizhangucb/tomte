@@ -6,7 +6,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { outputDir } from "../agent-workflows/shared/common";
+import { outputDir } from "./run-output";
 import { errorMessage } from "./errors";
 import { formatUsageComment, type RunUsageRecord, usageMarker } from "./usage";
 

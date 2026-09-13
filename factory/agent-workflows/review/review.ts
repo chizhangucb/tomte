@@ -25,19 +25,15 @@
  * - `extraction.md` gains `verdict` and `criteria`, and its `summary` field asks
  *   what the PR does and why the verdict is what it is, where his asked what the
  *   reviewer changed: he has no verdict (story 5).
+ * - the run goes through `lib/run-agent-workflow.ts` (#313): rotation, the
+ *   config dir per account, `noSandbox()`, the prompt file and the
+ *   failure-to-`fail` `try`/`catch` are the one shell's, not copied here. His
+ *   extraction run is inside it.
  */
 import * as fs from "node:fs";
-import * as path from "node:path";
-import * as sandcastle from "@ai-hero/sandcastle";
-import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
-import { runWithRotation } from "../../lib/accounts";
-import {
-  fail,
-  gh,
-  required,
-  writeJson,
-  writeText,
-} from "../shared/common";
+import { required } from "../../lib/env";
+import { gh } from "../../lib/gh";
+import { writeJson, writeText } from "../../lib/run-output";
 import { resolveRoleModel } from "../../lib/model";
 import { assertReadOnly, worktreeState } from "../../lib/read-only";
 import {
@@ -53,7 +49,7 @@ import {
   type InlineComment,
   type ThreadReply,
 } from "../shared/review-output";
-import { runWithExtraction } from "../shared/run-with-extraction";
+import { runAgentWorkflow } from "../../lib/run-agent-workflow";
 import {
   boundOutput,
   parseAcceptanceCriteria,
@@ -116,45 +112,49 @@ const writeReview = (review: ReviewFiles): void => {
   console.log(`Verdict: ${verdict.verdict} (${verdictDescription(verdict)}).`);
 };
 
-try {
-  // Whose words this run reads (story 27, ADR 0008): built once here
-  // and passed down, so nothing between here and the prompt can widen it.
-  const policy = trustPolicyFromEnv();
-  console.log(`Trusted authors: ${policy.associations.join(", ")}.`);
-  const context = fetchPullRequestContext(PR_NUMBER, policy);
-  console.log(describeDropped(context.dropped));
-  const criteria = parseAcceptanceCriteria(context.issueBody);
-  const { model } = resolveRoleModel("reviewer", REVIEWER_MODEL);
-  console.log(`Reviewer model: ${model}.`);
-  console.log(
-    `Ticket #${context.issueNumber || "(none)"}: ${criteria.length} acceptance criteria.`,
-  );
+await runAgentWorkflow(
+  {
+    name: `review-${PR_NUMBER}`,
+    runName: `review-pr-${PR_NUMBER}`,
+    role: "reviewer",
+    dir: import.meta.dirname,
+    plugins: false,
+    extract: reviewOutputSchema,
+  },
+  async (run) => {
+    // Whose words this run reads (story 27, ADR 0008): built once here
+    // and passed down, so nothing between here and the prompt can widen it.
+    const policy = trustPolicyFromEnv();
+    console.log(`Trusted authors: ${policy.associations.join(", ")}.`);
+    const context = fetchPullRequestContext(PR_NUMBER, policy);
+    console.log(describeDropped(context.dropped));
+    const criteria = parseAcceptanceCriteria(context.issueBody);
+    const { model } = resolveRoleModel("reviewer", REVIEWER_MODEL);
+    console.log(`Reviewer model: ${model}.`);
+    console.log(
+      `Ticket #${context.issueNumber || "(none)"}: ${criteria.length} acceptance criteria.`,
+    );
 
-  if (criteria.length === 0) {
-    // Nothing to tick, so no reviewer run: the verdict is a mechanical fail.
-    const reason = noCriteriaReason(context);
-    console.log(reason);
-    writeReview({
-      verdict: resolveVerdict([], { verdict: "fail", criteria: [] }),
-      issueNumber: context.issueNumber,
-      summary: `${reason} The reviewer ticks acceptance criteria; without them there is nothing to judge.`,
-      inlineComments: [],
-      replies: [],
-    });
-  } else {
-    const testOutput =
-      TEST_OUTPUT_FILE && fs.existsSync(TEST_OUTPUT_FILE)
-        ? boundOutput(fs.readFileSync(TEST_OUTPUT_FILE, "utf8"), TEST_OUTPUT_LIMITS)
-        : "(no test output was captured)";
-    const baseline = worktreeState();
+    if (criteria.length === 0) {
+      // Nothing to tick, so no reviewer run: the verdict is a mechanical fail.
+      const reason = noCriteriaReason(context);
+      console.log(reason);
+      writeReview({
+        verdict: resolveVerdict([], { verdict: "fail", criteria: [] }),
+        issueNumber: context.issueNumber,
+        summary: `${reason} The reviewer ticks acceptance criteria; without them there is nothing to judge.`,
+        inlineComments: [],
+        replies: [],
+      });
+    } else {
+      const testOutput =
+        TEST_OUTPUT_FILE && fs.existsSync(TEST_OUTPUT_FILE)
+          ? boundOutput(fs.readFileSync(TEST_OUTPUT_FILE, "utf8"), TEST_OUTPUT_LIMITS)
+          : "(no test output was captured)";
+      const baseline = worktreeState();
 
-    const result = await runWithRotation(`review-${PR_NUMBER}`, model, (agent, log) =>
-      runWithExtraction({
-        name: `review-pr-${PR_NUMBER}`,
-        agent,
-        sandbox: noSandbox(),
-        logging: log.logging,
-        promptFile: path.join(import.meta.dirname, "prompt.md"),
+      const result = await run({
+        model,
         promptArgs: {
           PR_NUMBER,
           BRANCH,
@@ -169,36 +169,25 @@ try {
           TEST_OUTPUT: testOutput,
           PR_COMMENTS_JSON: context.prCommentsJson,
         },
-        output: sandcastle.Output.object({
-          tag: "output",
-          schema: reviewOutputSchema,
-        }),
-        extractionPrompt: fs.readFileSync(
-          path.join(import.meta.dirname, "extraction.md"),
-          "utf8",
-        ),
-      }),
-      { role: "reviewer" },
-    );
+      });
 
-    assertReadOnly("Reviewer", BRANCH_HEAD_SHA, result.commits.length, baseline);
+      assertReadOnly("Reviewer", BRANCH_HEAD_SHA, result.commits.length, baseline);
 
-    const inlineComments = filterInlineComments(
-      result.output.inlineComments,
-      context.diffLines,
-    );
-    const replies = filterReplies(result.output.replies, context.validReplyIds);
-    writeReview({
-      verdict: resolveVerdict(criteria, result.output),
-      issueNumber: context.issueNumber,
-      summary: result.output.summary,
-      inlineComments,
-      replies,
-    });
-    console.log(
-      `Review complete. Inline comments: ${inlineComments.length}. Replies: ${replies.length}.`,
-    );
-  }
-} catch (error) {
-  fail(error instanceof Error ? error.message : String(error));
-}
+      const inlineComments = filterInlineComments(
+        result.output.inlineComments,
+        context.diffLines,
+      );
+      const replies = filterReplies(result.output.replies, context.validReplyIds);
+      writeReview({
+        verdict: resolveVerdict(criteria, result.output),
+        issueNumber: context.issueNumber,
+        summary: result.output.summary,
+        inlineComments,
+        replies,
+      });
+      console.log(
+        `Review complete. Inline comments: ${inlineComments.length}. Replies: ${replies.length}.`,
+      );
+    }
+  },
+);

@@ -8,7 +8,7 @@
  *
  * Env: RUN_URL. The comment goes to stdout; the step posts it.
  */
-import { required } from "../agent-workflows/shared/common";
+import { required } from "../lib/env";
 import { RATE_LIMITED_REASON, renderRequeueComment } from "./decide";
 
 process.stdout.write(

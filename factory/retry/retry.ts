@@ -39,7 +39,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { required } from "../agent-workflows/shared/common";
+import { required } from "../lib/env";
 import { errorMessage } from "../lib/errors.ts";
 import { linkedIssueNumber } from "../lib/linked-issue.ts";
 import { ESCALATION_LABEL } from "../lib/labels.ts";

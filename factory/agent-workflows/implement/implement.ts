@@ -1,9 +1,15 @@
 /**
  * Vendored from sandcastle 0.12.0, `.sandcastle/agent-workflows/implement/implement.ts`.
- * His shape stands: read the issue, `sandcastle.run()` the prompt file, fail
- * when the agent made no commits. Every line that differs is forced, and each
- * is named here (#47 keeps this list true):
+ * His shape stands: read the issue, run the prompt file, fail when the agent
+ * made no commits. Every line that differs is forced, and each is named here
+ * (#47 keeps this list true):
  *
+ * - the run itself goes through `lib/run-agent-workflow.ts` (#313), which owns
+ *   the shell all four agent workflows repeated: rotation, the config dir per
+ *   account, `noSandbox()`, the prompt file beside this script, the plugin
+ *   install per attempt, and the `try`/`catch` that turns a failure into a
+ *   reason the workflow posts. His `run()` call is inside it; what stays here
+ *   is the ticket this run is for and the commit count that judges it.
  * - account rotation, one config dir per account: stories 15, 16, 17, ADR 0004.
  * - model as a workflow input plus a `model:` label override: story 20.
  * - ticket document, parent spec and `ticket-N.md`: stories 22, 23.
@@ -43,13 +49,13 @@
  *   does not have (story 12 of #46).
  */
 import * as path from "node:path";
-import * as sandcastle from "@ai-hero/sandcastle";
-import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
-import { runWithRotation } from "../../lib/accounts";
-import { fail, gh, outputDir, required, sh, writeText } from "../shared/common";
+import { required } from "../../lib/env";
+import { gh } from "../../lib/gh";
+import { fail, outputDir, writeText } from "../../lib/run-output";
+import { sh } from "../../lib/sh";
 import { resolveRoleModel } from "../../lib/model";
 import { bundledReviewStep } from "../../lib/harness";
-import { installPluginsForAttempt } from "../../lib/plugins";
+import { runAgentWorkflow } from "../../lib/run-agent-workflow";
 import { fetchIssue, fetchParentIssue, ticketDocument } from "../../lib/ticket-context";
 import { trustPolicyFromEnv } from "../../lib/trusted-authors";
 import { retrySectionForRun } from "../../retry/context";
@@ -59,59 +65,61 @@ const ISSUE_TITLE = required("ISSUE_TITLE");
 const BRANCH = required("BRANCH");
 const IMPLEMENTER_MODEL = required("IMPLEMENTER_MODEL");
 
-try {
-  const repo =
-    process.env.GH_REPO ??
-    gh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]).trim();
-  // Whose words this run acts on (ADR 0008). One list for the ticket,
-  // its comments, its parent spec, and the retry marker.
-  const policy = trustPolicyFromEnv();
-  console.log(`Trusted authors: ${policy.associations.join(", ")}.`);
-  // Throws on an API error: a missing body must never read as an empty ticket.
-  const issue = fetchIssue(ISSUE_NUMBER, policy);
-  const issueContext = issue.text;
-  console.log(
-    issue.droppedComments === 0
-      ? "Untrusted comments dropped: none."
-      : `Untrusted comments dropped: ${issue.droppedComments} on the ticket.`,
-  );
-  const parent = fetchParentIssue(repo, ISSUE_NUMBER);
-  console.log(
-    parent
-      ? `Parent spec: #${parent.number} ${parent.title} (${parent.authorAssociation}).`
-      : "Parent spec: none, the ticket stands alone.",
-  );
-  const ticketFile = `ticket-${ISSUE_NUMBER}.md`;
-  writeText(
-    ticketFile,
-    ticketDocument({ number: ISSUE_NUMBER, issueContext, parent, policy }),
-  );
-  // A retry (#16) runs on the same branch with the previous failure in its prompt.
-  const retrySection = retrySectionForRun(ISSUE_NUMBER, policy);
+await runAgentWorkflow(
+  {
+    name: `implement-${ISSUE_NUMBER}`,
+    runName: `implement-#${ISSUE_NUMBER}`,
+    role: "implementer",
+    dir: import.meta.dirname,
+    plugins: true,
+    // The review skills run in sub-agents whose output never reaches this
+    // stream, so the parent can be silent for a while: the library's 10
+    // minute idle default would cut a long review short. With the turn cap
+    // gone (#49) the two bounds left are this idle timeout and the 60 minute
+    // job timeout.
+    idleTimeoutSeconds: 30 * 60,
+  },
+  async (run) => {
+    const repo =
+      process.env.GH_REPO ??
+      gh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]).trim();
+    // Whose words this run acts on (ADR 0008). One list for the ticket,
+    // its comments, its parent spec, and the retry marker.
+    const policy = trustPolicyFromEnv();
+    console.log(`Trusted authors: ${policy.associations.join(", ")}.`);
+    // Throws on an API error: a missing body must never read as an empty ticket.
+    const issue = fetchIssue(ISSUE_NUMBER, policy);
+    const issueContext = issue.text;
+    console.log(
+      issue.droppedComments === 0
+        ? "Untrusted comments dropped: none."
+        : `Untrusted comments dropped: ${issue.droppedComments} on the ticket.`,
+    );
+    const parent = fetchParentIssue(repo, ISSUE_NUMBER);
+    console.log(
+      parent
+        ? `Parent spec: #${parent.number} ${parent.title} (${parent.authorAssociation}).`
+        : "Parent spec: none, the ticket stands alone.",
+    );
+    const ticketFile = `ticket-${ISSUE_NUMBER}.md`;
+    writeText(
+      ticketFile,
+      ticketDocument({ number: ISSUE_NUMBER, issueContext, parent, policy }),
+    );
+    // A retry (#16) runs on the same branch with the previous failure in its prompt.
+    const retrySection = retrySectionForRun(ISSUE_NUMBER, policy);
 
-  const labels = JSON.parse(
-    gh(["issue", "view", ISSUE_NUMBER, "--json", "labels", "--jq", "[.labels[].name]"]),
-  ) as string[];
-  const { model, source } = resolveRoleModel("implementer", IMPLEMENTER_MODEL, labels);
-  console.log(`Implementer model: ${model} (from ${source}).`);
+    const labels = JSON.parse(
+      gh(["issue", "view", ISSUE_NUMBER, "--json", "labels", "--jq", "[.labels[].name]"]),
+    ) as string[];
+    const { model, source } = resolveRoleModel("implementer", IMPLEMENTER_MODEL, labels);
+    console.log(`Implementer model: ${model} (from ${source}).`);
 
-  const result = await runWithRotation(`implement-${ISSUE_NUMBER}`, model, (agent, log) => {
-    // Each account runs in its own config dir, so the skills the prompt
-    // invokes by name go into the dir of the account this attempt uses.
-    installPluginsForAttempt(agent.env.CLAUDE_CONFIG_DIR);
-    return sandcastle.run({
-      name: `implement-#${ISSUE_NUMBER}`,
-      agent,
-      sandbox: noSandbox(),
-      logging: log.logging,
-      // The review skills run in sub-agents whose output never reaches this
-      // stream, so the parent can be silent for a while: the library's 10
-      // minute idle default would cut a long review short. With the turn cap
-      // gone (#49) the two bounds left are this idle timeout and the 60
-      // minute job timeout.
-      idleTimeoutSeconds: 30 * 60,
-      promptFile: path.join(import.meta.dirname, "prompt.md"),
-      promptArgs: {
+    const result = await run({
+      model,
+      // The bundled-review step is rendered for the provider this attempt drew,
+      // so the args are built from the agent rather than fixed beforehand.
+      promptArgs: (agent) => ({
         ISSUE_NUMBER,
         ISSUE_TITLE,
         BRANCH,
@@ -119,20 +127,18 @@ try {
         TICKET_FILE: path.join(outputDir(), ticketFile),
         RETRY_SECTION: retrySection,
         BUNDLED_REVIEW_STEP: bundledReviewStep(agent.name),
-      },
+      }),
     });
-  }, { role: "implementer" });
 
-  // Against main, not this run's start: a retry that inherits the previous
-  // attempt's commits and rightly changes nothing still has a branch to judge.
-  // On the branch by name, which is what the workflow pushes, not on HEAD.
-  const commitsAhead = Number(sh(`git rev-list --count "main..refs/heads/${BRANCH}"`).trim());
-  if (!Number.isFinite(commitsAhead) || commitsAhead === 0) {
-    fail("Agent finished but no commits were made on the branch.");
-  }
+    // Against main, not this run's start: a retry that inherits the previous
+    // attempt's commits and rightly changes nothing still has a branch to judge.
+    // On the branch by name, which is what the workflow pushes, not on HEAD.
+    const commitsAhead = Number(sh(`git rev-list --count "main..refs/heads/${BRANCH}"`).trim());
+    if (!Number.isFinite(commitsAhead) || commitsAhead === 0) {
+      fail("Agent finished but no commits were made on the branch.");
+    }
 
-  console.log(`Implementation produced ${commitsAhead} commit(s) ahead of main.`);
-  console.log(`Commits this run: ${result.commits.length}.`);
-} catch (error) {
-  fail(error instanceof Error ? error.message : String(error));
-}
+    console.log(`Implementation produced ${commitsAhead} commit(s) ahead of main.`);
+    console.log(`Commits this run: ${result.commits.length}.`);
+  },
+);

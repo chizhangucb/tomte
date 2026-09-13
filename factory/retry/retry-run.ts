@@ -36,7 +36,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { RATE_LIMITED_FILE } from "../lib/accounts";
-import { gh, outputDir, required } from "../agent-workflows/shared/common";
+import { required } from "../lib/env";
+import { gh } from "../lib/gh";
+import { outputDir } from "../lib/run-output";
 import { errorMessage } from "../lib/errors";
 import { SECTION_END, SECTION_START, boundOutput } from "../lib/verdict";
 import { retryTargetRepo } from "../lib/target-repo.ts";
