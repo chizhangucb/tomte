@@ -12,8 +12,8 @@
  * Attempts are counted with a label on the ticket, `factory:retry-<n>`, so
  * the count survives across workflow runs and a human can see it. The
  * failing output travels as a marker comment on the ticket that the next
- * implementer run reads back. Pure functions here; `retry.ts` does the API
- * calls.
+ * implementer run reads back. Pure functions here; `retry.ts` acts on the
+ * decision through its needs record, and `retry-run.ts` makes the calls.
  */
 import type { FactoryPrFacts } from "../lib/factory-pr.ts";
 import { BLOCKED_LABEL, ESCALATION_LABEL, HOLD_LABELS, IMPLEMENT_LABEL, IN_PROGRESS_LABEL, READY_LABEL } from "../lib/labels.ts";
