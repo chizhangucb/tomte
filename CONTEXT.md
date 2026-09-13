@@ -65,6 +65,10 @@ _Avoid_: failure, blocked (bare *blocked* is the tracker's dependency word, and 
 A run handed back to the queue because what stopped it was not the ticket's failure: every account rate limited, or a check still pending when the wait for it runs out. A comment naming the cause, no retry spent, and no label for a human. One meaning on both sides (#148): a ticket is left with no factory label for the dispatcher, a PR in `agent:in-progress` for the reconciler, which re-adds the start label at its stuck deadline.
 _Avoid_: retry (the attempt that is counted), hand-off (the implementer's, for a conflict), blocked (a human's).
 
+**PR fix**:
+Who repairs a pull request the factory will not merge as-is: the factory itself (a **hand-off**, `agent:implement`) or the PR's author (a **tell-author**, `agent:blocked`). The one two-way choice, keyed on whether the factory authored the PR, decided once in `factory/lib/pr-disposition.ts` (#309) and read wherever a conflict or a failing check raises the question: update-branch's conflict plan, the retry handler's conflict hand-off, its failing-check tell-author. The module returns the label and the sentence naming what it does; each caller keeps its own trigger, comment framing and accounting.
+_Avoid_: escalation (the factory done trying, not repairing), requeue (no fix needed, just handed back to a sweep).
+
 **Hand-off**:
 A PR given back to the implementer because it conflicts with its base: a comment naming the cause, then `agent:implement`, with no retry spent. Made by update-branch when the API cannot bring the branch up to date, and by the retry handler when GitHub reports the conflict during its wait for checks. Never for a human: that is `agent:blocked`. Either maker makes one only on a **Factory-authored PR**, update-branch since #180 and the retry handler since #183; the same conflict on any other PR gets the comment and `agent:blocked`, since the branch is its author's and no agent may rewrite it.
 _Avoid_: requeue (the retry handler's other no-retry path: a ticket goes back to the dispatcher, a PR to the reconciler), escalation (the human queue).

@@ -31,10 +31,9 @@
  */
 import { errorMessage } from "../lib/errors.ts";
 import { GhError } from "../lib/gh.ts";
-import { BLOCKED_LABEL, IMPLEMENT_LABEL } from "../lib/labels.ts";
+import { type PrDisposition, prDisposition } from "../lib/pr-disposition.ts";
 import {
   type CommitStatus,
-  type ConflictPlan,
   type HeadCommit,
   type OpenPr,
   type Plan,
@@ -194,57 +193,35 @@ export const updateBranch = async (
     needs.addLabel(number, label);
   };
 
-  /** No API call resolves a conflict: label the PR for agent-implement-pr.yml, which resolves it on the branch. */
-  const handOff = (number: number): void =>
-    commentAndLabel(number, [
-      `Handing it to the implementer: labeled \`${IMPLEMENT_LABEL}\`. Its run merges \`${base}\` into the branch, resolves the ` +
-        "conflicts, and pushes; the review then judges the new head and auto-merge lands it.",
-    ], IMPLEMENT_LABEL);
-
-  /**
-   * The factory did not open this PR, so the conflict goes back to whoever did:
-   * a comment naming the cause and what to do, then `agent:blocked`, which is
-   * the one label that means a human must look. No agent touches the branch.
-   *
-   * The label is what makes the decline stick, and the comment says so, because
-   * it is also what the author has to take off to hand the PR back. Every push
-   * to main runs this job again and the conflict is still there, so without it
-   * the same comment would arrive on every push; and the reconciler re-arms a
-   * Factory PR carrying no `agent:*` label at its verdict deadline, so a PR the
-   * reviewer had already judged would be enrolled again with the conflict in
-   * place (`PARKED_LABELS` in `factory/dispatch/reconcile.ts`).
-   *
-   * Auto-merge is left exactly as it is, and so is the update half of this run,
-   * which never reads a label and never asks who opened a PR. So the branch is
-   * brought up to date again the moment the conflict is gone, label or no label.
-   */
-  const tellAuthor = (number: number): void =>
-    commentAndLabel(number, [
-      `The factory did not open this PR, so it will not rewrite the branch: merging \`${base}\` in and resolving is yours. ` +
-        `Labeled \`${BLOCKED_LABEL}\`, which is this factory's "a human must look".`,
-      `Push the resolution and the factory goes back to bringing the branch up to date on its own, since that part never asks ` +
-        `who opened a PR. Then remove \`${BLOCKED_LABEL}\`: it is the factory's record that a human is still needed here, and ` +
-        `on a PR the reviewer has judged it is also what holds the next review back. Auto-merge, if it is armed, is untouched ` +
-        "throughout.",
-    ], BLOCKED_LABEL);
-
   /**
    * Carry out a conflict decision, whether the plan took it from a CONFLICTING
    * scan or it was taken again when GitHub refused the call this run made anyway.
    * One place, so the two routes to the same decision cannot act on it two ways.
+   *
+   * The label and the one sentence naming what it does are read from
+   * `prDisposition` (#309), so this comment cannot drift from the retry
+   * handler's on the same conflict. On a hand-off, agent-implement-pr.yml
+   * resolves the conflict on the branch; on a tell-author, no agent touches it.
+   * The label is what makes a tell-author's decline stick: every push to main
+   * runs this job again with the conflict still there, and the reconciler
+   * re-arms a Factory PR carrying no `agent:*` label at its verdict deadline
+   * (`PARKED_LABELS` in `factory/dispatch/reconcile.ts`). Auto-merge and the
+   * update half are left as they are: neither asks who opened a PR, so the
+   * branch is brought up to date again the moment the conflict is gone.
    */
-  const actOnConflict = ({ number, action, reason }: ConflictPlan): void => {
-    if (action === "hand-off") {
-      handOff(number);
-      console.log(`#${number}: ${reason}; commented and labeled ${IMPLEMENT_LABEL}.`);
-      return;
-    }
-    if (action === "tell-author") {
-      tellAuthor(number);
-      console.log(`#${number}: ${reason}; commented and labeled ${BLOCKED_LABEL}.`);
-      return;
-    }
-    console.log(`#${number}: ${reason}, left alone.`);
+  const actOnConflict = (number: number, reason: string, disp: PrDisposition): void => {
+    const paragraphs =
+      disp.action === "hand-off"
+        ? [`Handing it to the implementer: labeled \`${disp.add}\`. ${disp.sentence} The review then judges the new head and auto-merge lands it.`]
+        : [
+            `The factory did not open this PR, so it will not rewrite the branch: merging \`${base}\` in and resolving is yours. ` +
+              `Labeled \`${disp.add}\`, which is this factory's "a human must look".`,
+            `${disp.sentence} The factory keeps bringing the branch up to date on its own meanwhile, since that part never asks ` +
+              `who opened a PR; on a PR the reviewer has judged, \`${disp.add}\` is also what holds the next review back. ` +
+              "Auto-merge, if it is armed, is untouched throughout.",
+          ];
+    commentAndLabel(number, paragraphs, disp.add);
+    console.log(`#${number}: ${reason}; commented and labeled ${disp.add}.`);
   };
 
   /** Mark the head the factory asked GitHub to update from; findVerdict trusts only merges made on such a head. */
@@ -292,7 +269,7 @@ export const updateBranch = async (
       }
       if (plan.action === "skip") continue;
       if (plan.action === "hand-off" || plan.action === "tell-author") {
-        actOnConflict({ ...plan, action: plan.action });
+        actOnConflict(plan.number, plan.reason, prDisposition(pr, base));
         continue;
       }
       const result = requestUpdate(plan.number, pr.head.sha);
@@ -304,7 +281,14 @@ export const updateBranch = async (
         const reason = `update-branch refused: ${conflict.reason}`;
         outcome.action = conflict.action;
         outcome.reason = reason;
-        actOnConflict({ ...conflict, reason });
+        // A PR already carrying a hand-off label is skipped, not re-commented:
+        // prDisposition never returns skip, so acting on it here would re-label
+        // and re-comment on every push to main, which HANDED_OFF_LABELS exists to stop.
+        if (conflict.action === "skip") {
+          console.log(`#${conflict.number}: ${reason}, left alone.`);
+          continue;
+        }
+        actOnConflict(conflict.number, reason, prDisposition(pr, base));
         continue;
       }
       if (result === "head moved") {
