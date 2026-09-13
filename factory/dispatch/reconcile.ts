@@ -67,7 +67,7 @@
  * `node --experimental-strip-types` without installing the engine.
  */
 import { isFactoryPr } from "../lib/factory-pr.ts";
-import { agentLabels, ESCALATION_LABEL, HOLD_LABELS, READY_LABEL, REVIEW_LABEL } from "../lib/labels.ts";
+import { agentLabels, ESCALATION_LABEL, HOLD_LABELS, PARKED_LABELS, READY_LABEL, REVIEW_LABEL } from "../lib/labels.ts";
 import { issuesClosedBy } from "../lib/linked-issue.ts";
 import { type Author, type TrustPolicy, authorAssociation } from "../lib/trusted-authors.ts";
 import { escalationLabels } from "../retry/escalation.ts";
@@ -84,7 +84,6 @@ export type Deadlines = {
 export const DEFAULT_DEADLINES: Deadlines = { stuckMinutes: 30, verdictMinutes: 30, updateMinutes: 30 };
 
 export { ESCALATION_LABEL };
-export const PARKED_LABELS = ["agent:blocked", ESCALATION_LABEL] as const;
 export const UPDATE_BRANCH_EVENT = "factory-update-branch";
 export const SWEEP_MARK = /^<!-- factory:sweep miss=(\d+)(?: tries=(\d+))? -->/;
 /**

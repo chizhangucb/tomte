@@ -69,6 +69,15 @@ export const IN_PROGRESS_LABEL = "agent:in-progress";
 export const REVIEW_LABEL = "agent:review";
 
 /**
+ * The factory's own pair: a subject the factory has stopped on and no sweep
+ * repairs. The reconciler reports such a subject and leaves it alone, the
+ * heartbeat counts it as nothing waiting, and update-branch neither re-arms
+ * nor updates its PR. Always the factory's doing, which is what separates it
+ * from a `hold`, a person choosing the timing (CONTEXT.md).
+ */
+export const PARKED_LABELS: readonly string[] = [BLOCKED_LABEL, ESCALATION_LABEL];
+
+/**
  * Labels that stop an agent starting, read from here by the dispatcher, the
  * retry handler (`findHold`) and the reconciler so they cannot disagree. `hold`
  * alone since #210.

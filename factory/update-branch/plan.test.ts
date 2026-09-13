@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { PARKED_LABELS } from "../dispatch/reconcile.ts";
 import { FACTORY_BODY_MARKER } from "../lib/factory-pr.ts";
 import { GhError } from "../lib/gh.ts";
-import { BLOCKED_LABEL, IMPLEMENT_LABEL } from "../lib/labels.ts";
+import { BLOCKED_LABEL, IMPLEMENT_LABEL, PARKED_LABELS } from "../lib/labels.ts";
 import {
   type CommitStatus,
   type ConflictSubject,

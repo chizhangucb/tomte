@@ -4,10 +4,20 @@
  */
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { test } from "node:test";
 
 import { DISPATCH_LABEL, FACTORY_STATE_LABELS } from "../dispatch/select.ts";
-import { ESCALATION_LABEL, HANDED_OFF_LABELS, HOLD_LABEL, HOLD_LABELS, READY_LABEL, REVIEW_LABEL } from "./labels.ts";
+import {
+  BLOCKED_LABEL,
+  ESCALATION_LABEL,
+  HANDED_OFF_LABELS,
+  HOLD_LABEL,
+  HOLD_LABELS,
+  PARKED_LABELS,
+  READY_LABEL,
+  REVIEW_LABEL,
+} from "./labels.ts";
 
 /**
  * A module's source with its comments taken out. Prose may name a label, since
@@ -30,6 +40,35 @@ test("`agent:review` is spelled once, in REVIEW_LABEL, and every module that wri
   for (const file of ["factory/dispatch/reconcile.ts", "factory/lib/target-repo.ts"]) {
     assert.doesNotMatch(codeOf(file), /agent:review/, `${file} spells agent:review instead of reading REVIEW_LABEL`);
   }
+});
+
+/** Every module in the tree, tests included: the readers a label set can be imported from the wrong home by. */
+const modules = (dir = "factory"): string[] =>
+  fs.readdirSync(new URL(`../../${dir}`, import.meta.url), { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory() ? modules(`${dir}/${entry.name}`) : entry.name.endsWith(".ts") ? [`${dir}/${entry.name}`] : [],
+  );
+
+/**
+ * Where each `import { ... NAME ... } from "x"` in the tree reads that name
+ * from, as a repo-relative path, so a sibling's `./labels.ts` and a
+ * neighbour's `../lib/labels.ts` are the one home they name.
+ */
+const importersOf = (name: string): { file: string; from: string }[] =>
+  modules().flatMap((file) =>
+    [...fs.readFileSync(new URL(`../../${file}`, import.meta.url), "utf8").matchAll(/import\s*\{([^}]*)\}\s*from\s*"([^"]+)"/g)]
+      .filter((match) => match[1]!.split(",").some((binding) => binding.trim().replace(/^type\s+/, "") === name))
+      .map((match) => ({ file, from: path.posix.join(path.posix.dirname(file), match[2]!) })),
+  );
+
+test("PARKED_LABELS is the label module's, read from there by the reconciler and everyone else", () => {
+  // It was the reconciler's own, and the heartbeat imported it from there, so
+  // the parked pair was defined by the module that acts on it rather than by
+  // the vocabulary every actor shares. CONTEXT.md calls it the factory's own
+  // pair, and ADR 0005 has it as exactly those two.
+  assert.deepEqual([...PARKED_LABELS], [BLOCKED_LABEL, ESCALATION_LABEL]);
+  assert.deepEqual([...PARKED_LABELS], ["agent:blocked", "needs-human"]);
+  const elsewhere = importersOf("PARKED_LABELS").filter(({ from }) => from !== "factory/lib/labels.ts");
+  assert.deepEqual(elsewhere, [], "every reader imports it from lib/labels.ts");
 });
 
 /** The markdown a reader meets: everything under `docs/`, plus the front door and the glossary. */
