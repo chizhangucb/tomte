@@ -35,6 +35,8 @@ const WAIVER_VARIABLE = WAIVER.variable;
 
 const repoRoot = new URL("../../", import.meta.url);
 const ENTRYPOINT = "factory/heartbeat/send.ts";
+/** The loop runner, which carries no interval of its own and so is one of the files the scan below owns (#326). */
+const LOOP_RUNNER = "scripts/heartbeat-loop.sh";
 /** The env var the host passes the token in, which is the one `gh` itself reads. */
 const TOKEN_ENV = "GH_TOKEN";
 /** The pages a maintainer onboards a target from, named as `dispatch/triggers.test.ts` names its own sites. */
@@ -475,12 +477,12 @@ test("no other page or module restates the interval, so there is one copy to kee
   const tracked = execFileSync("git", ["ls-files", "-z"], { cwd: fileURLToPath(repoRoot), encoding: "utf8" }).split("\0").filter(Boolean);
   assert.ok(tracked.length > 0, "the walk found no tracked files at all");
   const restating: string[] = [];
-  let scanned = 0;
+  const scanned: string[] = [];
   for (const file of tracked) {
     if (skipped.has(file) || !/\.(md|ts|yml|sh)$/.test(file)) continue;
     const text = asProse(fs.readFileSync(new URL(file, repoRoot), "utf8"));
     if (!ABOUT_THE_HEARTBEAT.test(text)) continue;
-    scanned += 1;
+    scanned.push(file);
     for (const sentence of text.split(/(?<=[.:])\s/)) {
       if (/\bschedule\b|\bcron\b/i.test(sentence)) continue;
       // Every statement in the sentence, not the first one. This repo writes
@@ -496,7 +498,13 @@ test("no other page or module restates the interval, so there is one copy to kee
   }
   // A scope that matched nothing would pass this for the wrong reason, and the
   // heartbeat is named across the caller, the workflows and the dispatcher.
-  assert.ok(scanned > 5, `only ${scanned} files mention the heartbeat, so the scope has stopped reaching them`);
+  assert.ok(scanned.length > 5, `only ${scanned.length} files mention the heartbeat, so the scope has stopped reaching them`);
+  // The loop runner by name (#326). It is the one file that sleeps the
+  // interval rather than describing it, so a number written into it is a host
+  // running at a cadence this repo no longer documents -- and a scan that
+  // stopped reaching it, by a rename or by prose that stopped naming the
+  // heartbeat, would go on passing while that number sat there.
+  assert.ok(scanned.includes(LOOP_RUNNER), `the scan no longer reaches ${LOOP_RUNNER}, which sleeps the interval`);
   assert.deepEqual(restating, [], `these state the heartbeat's cadence instead of naming the interval: ${restating.join(", ")}`);
 });
 
