@@ -287,7 +287,9 @@ test("the keep-alive examples carry no interval, because the host is not what sc
   // The other half of criterion 6, and the point of the whole ticket: launchd
   // and systemd are each given one job, restarting the loop, and neither is
   // given a number. The host that carries an interval is the host that drifts
-  // from the repo's, which is the second copy #265 built a warning to notice.
+  // from the repo's, and the loop is what leaves it no second copy to drift
+  // with: the sender itself remembers nothing about the passes before this one
+  // (#328).
   const blocks = fencedBlocks(readme());
   for (const [scheduler, key] of [
     ["launchd", "KeepAlive"],

@@ -38,6 +38,8 @@ const ENTRYPOINT = "factory/heartbeat/send.ts";
 const LOOP_RUNNER = "scripts/heartbeat-loop.sh";
 /** This file, which the repo-wide scans below exempt: it spells what it refuses. */
 const THIS_FILE = "factory/heartbeat/send.test.ts";
+/** The vendored plugins, which are a third party's text and describe nothing this repo keeps. */
+const VENDORED = "factory/plugins/mattpocock-skills/";
 /** Every tracked file, walked once for both repo-wide scans below, the way `lib/factory-repo.test.ts` walks them. */
 const tracked = (): readonly string[] => {
   const files = execFileSync("git", ["ls-files", "-z"], { cwd: fileURLToPath(repoRoot), encoding: "utf8" }).split("\0").filter(Boolean);
@@ -581,10 +583,15 @@ test("no file names the pass log or the cadence claim, which the sender no longe
   // Matched without case, because the two prose terms are written capitalised
   // wherever a sentence or a glossary heading opens on them, which is exactly
   // where a description would come back.
+  //
+  // This repo's own prose and code, and not the vendored plugins: those are a
+  // third party's text, re-copied whole by an update nobody here reviews line
+  // by line, and a skill that happens to write "pass log" about its own subject
+  // would fail this on a claim it never made about the heartbeat.
   const naming: string[] = [];
   for (const file of tracked()) {
     // This file alone, which has to spell the names in order to refuse them.
-    if (file === THIS_FILE) continue;
+    if (file === THIS_FILE || file.startsWith(VENDORED)) continue;
     const text = fs.readFileSync(new URL(file, repoRoot), "utf8").toLowerCase();
     for (const name of REMOVED_WITH_THE_PASS_LOG) if (text.includes(name.toLowerCase())) naming.push(`${file} ("${name}")`);
   }
@@ -644,7 +651,11 @@ test("no module the pass loads can write a file at all, wherever a host keeps it
   // over the whole cone rather than the entrypoint, because the pass log was
   // written by `send.ts` out of a module of its own, which is exactly the shape
   // a scan of the entrypoint alone would miss.
-  const writing = walkFrom(ENTRYPOINT).filter(({ specifier }) => specifier === "node:fs" || specifier === "node:fs/promises");
+  // Both spellings of each: the `node:` prefix is this repo's habit rather
+  // than a rule Node enforces, and `import * as fs from "fs"` loads exactly the
+  // same module.
+  const fileSystem = new Set(["node:fs", "node:fs/promises", "fs", "fs/promises"]);
+  const writing = walkFrom(ENTRYPOINT).filter(({ specifier }) => fileSystem.has(specifier));
   assert.deepEqual(writing, [], `these load the file system into a pass that keeps no state: ${writing.map(({ file }) => file).join(", ")}`);
 });
 
