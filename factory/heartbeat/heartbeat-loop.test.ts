@@ -235,3 +235,63 @@ test("a clone that answers no interval at all stops, rather than looping with no
   assert.deepEqual(shape, ["git", "read-interval"], "nothing is slept and no pass is run");
   assert.match(stderr, /could not read the heartbeat interval/, stderr);
 });
+
+const readme = (): string => fs.readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+
+/** The body of every fenced block on a page, which is what a maintainer copies out of it. */
+const fencedBlocks = (page: string): string[] => [...page.matchAll(/```[a-z]*\n([\s\S]*?)```/g)].map(([, body]) => body!);
+
+/** A literal as a regex, so a path or a key is matched whole and never as a pattern. */
+const literal = (text: string): RegExp => new RegExp(text.replaceAll(/[.*+?^${}()|[\]\\/]/g, "\\$&"));
+
+test("README's own-machine recipe runs the loop from a clone of its own, with the token and the switch in its environment", () => {
+  // Acceptance criterion 6. An adopter with an always-on machine reads this
+  // page and nothing else, so the three things that make the recipe work
+  // rather than merely run have to be on it: the clone is the loop's and not
+  // one anybody works in, the scoped token and the ping URL are the
+  // environment's, and the machine does not go to sleep under it.
+  const page = readme();
+  assert.match(page, literal("scripts/heartbeat-loop.sh"), "README names the loop runner");
+  const sentences = page.split(/(?<=[.:])\s/);
+  assert.ok(
+    sentences.some((sentence) => /\bclone\b/i.test(sentence) && /working checkout/i.test(sentence)),
+    "README says in one sentence that the loop wants a clone of its own and never a working checkout",
+  );
+  for (const variable of ["GH_TOKEN", PING_URL_ENV]) {
+    assert.match(page, new RegExp(`\\b${variable}\\b`), `README says the loop takes ${variable} from its environment`);
+  }
+  // Sleep, because a host asleep runs no pass at all, and a recipe that left
+  // it out would be a machine that looked always-on and was not.
+  assert.ok(
+    sentences.some((sentence) => /\bsleep(?:ing)?\b/i.test(sentence) && /pmset/.test(sentence) && /sleep\.target|suspend/.test(sentence)),
+    "README says how to stop the machine sleeping, on a Mac and on Linux",
+  );
+});
+
+test("the keep-alive examples carry no interval, because the host is not what schedules the pass", () => {
+  // The other half of criterion 6, and the point of the whole ticket: launchd
+  // and systemd are each given one job, restarting the loop, and neither is
+  // given a number. The host that carries an interval is the host that drifts
+  // from the repo's, which is the second copy #265 built a warning to notice.
+  const blocks = fencedBlocks(readme());
+  for (const [scheduler, key] of [
+    ["launchd", "KeepAlive"],
+    ["systemd", "Restart=always"],
+  ] as const) {
+    const examples = blocks.filter((block) => block.includes(key));
+    assert.equal(examples.length, 1, `README has one ${scheduler} example, keyed on ${key}`);
+    const example = examples[0]!;
+    assert.match(example, literal("scripts/heartbeat-loop.sh"), `the ${scheduler} example keeps the loop alive and runs nothing else`);
+    // Every way each of the two knows to say "on an interval". A recipe
+    // reaching for one of these is a host that schedules passes itself, which
+    // is what the loop replaced.
+    assert.doesNotMatch(
+      example,
+      /StartInterval|StartCalendarInterval|OnCalendar|OnUnitActiveSec|OnBootSec|OnActiveSec|\bcron\b|\btimer\b/i,
+      `the ${scheduler} example schedules nothing`,
+    );
+    for (const number of [String(HEARTBEAT_INTERVAL_MINUTES), INTERVAL_SECONDS]) {
+      assert.doesNotMatch(example, literal(number), `the ${scheduler} example does not restate the interval`);
+    }
+  }
+});
