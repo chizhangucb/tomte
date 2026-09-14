@@ -58,7 +58,9 @@ case "$*" in
     if [ "$passes" -le "\${PASS_FAILS:-0}" ]; then echo "stub pass failed" >&2; exit 1; fi ;;
   *)
     printf '%s\\t' read-interval >> "$CALLS"; printf '\\n' >> "$CALLS"
-    if [ -n "\${INTERVAL_READ_FAILS:-}" ]; then echo "$INTERVAL_READ_FAILS" >&2; exit 1; fi
+    if [ -n "\${INTERVAL_READ_FAILS:-}" ] && [ "$(grep -c '^read-interval' "$CALLS")" -gt "\${INTERVAL_READS_OK:-0}" ]; then
+      echo "$INTERVAL_READ_FAILS" >&2; exit 1
+    fi
     exec "$REAL_NODE" "$@" ;;
 esac
 exit 0
@@ -85,12 +87,14 @@ type Options = {
   passFails?: number;
   /** When set, the interval read fails with this text rather than answering. */
   intervalReadFails?: string;
+  /** How many interval reads answer before `intervalReadFails` starts failing them. */
+  intervalReadsOk?: number;
   /** The token and ping URL the host has in the loop's environment. */
   env?: Record<string, string>;
 };
 
 const run = (options: Options = {}) => {
-  const { passes = 2, gitFails, passFails = 0, intervalReadFails, env = {} } = options;
+  const { passes = 2, gitFails, passFails = 0, intervalReadFails, intervalReadsOk = 0, env = {} } = options;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "heartbeat-loop-"));
   for (const [name, source] of [
     ["git", stubGit],
@@ -117,6 +121,7 @@ const run = (options: Options = {}) => {
       GIT_FAILS: gitFails ?? "",
       PASS_FAILS: String(passFails),
       INTERVAL_READ_FAILS: intervalReadFails ?? "",
+      INTERVAL_READS_OK: String(intervalReadsOk),
     },
   });
   const calls: string[][] = fs
@@ -165,4 +170,68 @@ test("a pass is a pull, then the sender, then a sleep of the repo's interval, ov
   for (const call of calls.filter(([command]) => command === "sleep")) {
     assert.deepEqual(call, ["sleep", INTERVAL_SECONDS]);
   }
+});
+
+/** The three calls one whole pass makes, in the order the loop makes them. */
+const PASS = ["git", "read-interval", "node", "sleep"];
+
+test("a pass that fails is said out loud and the next pass runs anyway", () => {
+  // Acceptance criterion 3, the half that matters most: a target unreadable
+  // for one pass, or a token rate limited for a minute, must not be the end of
+  // the heartbeat for every target. The loop is the only thing sweeping them.
+  const { shape, stderr } = run({ passes: 2, passFails: 1 });
+  assert.deepEqual(shape, [...PASS, ...PASS], "the pass after a failed one is a whole pass");
+  assert.match(stderr, /pass FAILED/, `the failure is on stderr, where the sender puts its own: ${stderr}`);
+});
+
+test("a pull that fails is said out loud and the pass runs on the clone as it stands", () => {
+  // The other half of criterion 3. A clone that could not reach GitHub is
+  // still `main` as merged, one pass behind, so the pass is worth running:
+  // skipping it would mean a network blip on the host stopped every target
+  // sweeping, which is the failure the loop exists to survive.
+  const { shape, stderr } = run({ passes: 2, gitFails: "fatal: unable to access 'https://github.com/': could not resolve host" });
+  assert.deepEqual(shape, [...PASS, ...PASS], "a failed pull costs neither the pass nor the loop");
+  assert.match(stderr, /pull failed/, `the failure is on stderr: ${stderr}`);
+});
+
+test("the token and the ping URL reach the sender exactly as the host set them", () => {
+  // Acceptance criterion 4. The loop is a host's whole interface to the
+  // sender, so anything it rewrote on the way through would be a setting a
+  // maintainer set on the host and the pass never saw: a scoped token, and the
+  // dead-man's switch that says whether the pass happened at all (#325).
+  const env = { GH_TOKEN: "github_pat_stub_not_a_real_token", [PING_URL_ENV]: "https://hc-ping.test/2b0d1a1e-stub" };
+  const { passEnv } = run({ passes: 2, env });
+  assert.deepEqual(passEnv, [
+    [env.GH_TOKEN, env[PING_URL_ENV]],
+    [env.GH_TOKEN, env[PING_URL_ENV]],
+  ]);
+});
+
+test("an interval that cannot be read leaves the loop sleeping the last one it read", () => {
+  // The interval is read after every pull, which is what lets a moved constant
+  // reach the host. A read that fails is the same kind of thing as a failed
+  // pass -- one bad pass, not the end -- so the loop keeps the number the repo
+  // last gave it rather than guessing or spinning.
+  const { shape, calls, stderr } = run({ passes: 2, intervalReadFails: "node: bad flag", intervalReadsOk: 1 });
+  assert.deepEqual(shape, [...PASS, ...PASS]);
+  assert.deepEqual(
+    calls.filter(([command]) => command === "sleep"),
+    [
+      ["sleep", INTERVAL_SECONDS],
+      ["sleep", INTERVAL_SECONDS],
+    ],
+    "the second pass sleeps the interval the first one read",
+  );
+  assert.match(stderr, /sleeping the last one read/, stderr);
+});
+
+test("a clone that answers no interval at all stops, rather than looping with nothing to sleep", () => {
+  // The one case there is no last-read interval to fall back on. A loop that
+  // carried on here would run passes back to back at whatever speed the sender
+  // returns, which bills every target far harder than a stopped heartbeat
+  // does. Stopping hands it to the keep-alive, which restarts it throttled.
+  const { status, shape, stderr } = run({ passes: 2, intervalReadFails: "node: no such file" });
+  assert.equal(status, 1, stderr);
+  assert.deepEqual(shape, ["git", "read-interval"], "nothing is slept and no pass is run");
+  assert.match(stderr, /could not read the heartbeat interval/, stderr);
 });
