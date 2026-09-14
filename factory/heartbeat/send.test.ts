@@ -691,3 +691,49 @@ test("a switch that never answers gives up quickly and leaves the pass unchanged
     () => {},
   );
 });
+
+/** One sentence of a page, so a requirement is pinned as a line an adopter reads rather than as words scattered over a file. */
+const sentences = (text: string): string[] => text.split(/(?<=[.:])\s/);
+
+/**
+ * What any host needs to run the heartbeat (#325), each as the smallest thing
+ * README has to say for an adopter on a provider this repo writes no recipe
+ * for to get the whole contract. The recipes name Render and a launchd or
+ * systemd loop; this list is what is true whatever the host is, so an adopter
+ * who already lives somewhere else is not left guessing at the parts a recipe
+ * happened to carry.
+ *
+ * Each is a phrase and not a heading, so README may say them in whatever order
+ * its prose runs in; what the test owns is that none is missing.
+ */
+const HOST_REQUIREMENTS: { needs: string; in: RegExp[] }[] = [
+  { needs: "the command to run", in: [literal(ENTRYPOINT)] },
+  { needs: "the Node it runs on", in: [/\bnode\b/i, /--experimental-strip-types/] },
+  { needs: "`gh` on the host's PATH", in: [/\bgh\b/, /\bpath\b/i] },
+  { needs: "a checkout of main, not whatever branch a clone was left on", in: [/\bcheckout\b/i, /\bmain\b/] },
+  {
+    needs: "the token's scopes, on every target and nothing else",
+    in: [/contents write/i, /issues[ ,]/i, /pull requests/i, /variables read/i, /nothing else/i],
+  },
+  { needs: "how often to run it", in: [literal(INTERVAL_PHRASE)] },
+  { needs: "the switch to report to, and the check behind it", in: [literal(PING_URL_ENV), /healthchecks\.io/i] },
+  { needs: "the check's period, which is the interval plus a grace", in: [/\bperiod\b/i, /\bgrace\b/i] },
+];
+
+test("README says what any host needs, so an adopter on any provider has the whole contract", () => {
+  // Acceptance criterion 8 (#325). Before this, README's whole answer was "a
+  // host that runs the heartbeat", and every other part of the contract -- the
+  // token's scopes, the checkout, the switch -- lived in a comment in the
+  // sender or in nobody's head. Each requirement is asserted in one sentence,
+  // because a reader who finds the command on one page and the token four
+  // screens down has not been told what a host needs, they have been told to
+  // go and assemble it.
+  const text = fs.readFileSync(new URL("README.md", repoRoot), "utf8");
+  const said = sentences(text);
+  for (const requirement of HOST_REQUIREMENTS) {
+    assert.ok(
+      said.some((sentence) => requirement.in.every((part) => part.test(sentence))),
+      `README does not say, in one sentence, ${requirement.needs}`,
+    );
+  }
+});

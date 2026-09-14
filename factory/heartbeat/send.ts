@@ -23,6 +23,12 @@
  * Its alerting sees the non-zero exit a failed target ends on. Where the whole
  * thing runs is #111.
  *
+ * A host that sets `FACTORY_HEARTBEAT_PING_URL` is watched by a dead-man's
+ * switch as well: the exit status goes to that check after the pass, so a host
+ * that stops running the command at all is noticed by something outside it
+ * (#325, and `ping.ts` holds the reason). Unset means no ping, and a ping that
+ * fails costs the pass nothing.
+ *
  * Builtins only, imported with explicit `.ts`, so it runs with no `npm ci`
  * (`send.test.ts` pins that).
  */
