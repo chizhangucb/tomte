@@ -154,3 +154,63 @@ test("the image carries the repo, and its command is the sender", () => {
   assert.deepEqual(JSON.parse(command![1]!), ["node", "--experimental-strip-types", SENDER]);
   assert.ok(fs.existsSync(new URL(SENDER, repoRoot)), `${IMAGE} runs ${SENDER}, which this repo does not carry`);
 });
+
+/** The page an adopter deploys from, which is the only instruction the recipe ships with. */
+const README = "README.md";
+
+/** The recipe's own heading on that page, the bold lead-in the paragraphs below it belong to. */
+const RECIPE_HEADING = "**No always-on machine: run it on Render.**";
+
+/**
+ * The cloud recipe as its own text: everything from its heading to the next
+ * bold lead-in at the same level, so an assertion about the recipe cannot be
+ * satisfied by a word somewhere else on a page this long.
+ */
+const recipe = (): string => {
+  const readme = fs.readFileSync(new URL(README, repoRoot), "utf8");
+  const start = readme.indexOf(RECIPE_HEADING);
+  assert.notEqual(start, -1, `${README} carries the cloud recipe, under "${RECIPE_HEADING}"`);
+  const rest = readme.slice(start + RECIPE_HEADING.length);
+  // The next lead-in at the left margin, and not an indented one: the recipe's
+  // own steps are indented under the onboarding step it hangs off, so a stop at
+  // any bold line would end the section at its first step.
+  const next = rest.search(/\n(?:#{1,6} |\d+\. \*\*|\*\*[A-Z])/);
+  return next === -1 ? rest : rest.slice(0, next);
+};
+
+test("the cloud recipe is what a maintainer does: the group, the check, the blueprint", () => {
+  // Acceptance criterion 4. An adopter with no always-on machine has a repo, a
+  // Render account and nothing else, and what they can get wrong is skipping a
+  // step: a blueprint deployed before the group exists is a service that fails
+  // every pass, and a deploy with no check made is a host nobody is watching,
+  // which is the failure this whole spec exists to end.
+  const text = recipe();
+  // The group, by the name the blueprint asks Render for: a group under any
+  // other name is a deploy that never finds its token.
+  assert.match(text, new RegExp(String.raw`\b${ENV_GROUP}\b`), "the recipe names the environment group to create");
+  for (const variable of [TOKEN_ENV, PING_URL_ENV]) {
+    assert.match(text, new RegExp(String.raw`\b${variable}\b`), `the recipe says the group holds ${variable}`);
+  }
+  // The blueprint, by the path Render reads it from.
+  assert.match(text, /\brender\.yaml\b/, "the recipe names the blueprint to deploy");
+  assert.match(text, /healthchecks\.io/, "the recipe says to make the check that watches the job");
+});
+
+test("the cloud recipe says what it costs, since the whole reason to pick it is the bill", () => {
+  // A recipe that names a paid service and not its price is one an adopter has
+  // to price themselves before they dare run it. The number that matters is the
+  // per-service monthly minimum rather than the compute: one pass per interval
+  // is minutes of a month, so the minimum is the bill.
+  const text = recipe();
+  assert.match(text, /\$1\b/, "the recipe names the dollar a month it costs");
+  assert.match(text, /minimum/i, "the recipe says the dollar is Render's per-service minimum, not the compute");
+});
+
+test("the cloud recipe hands an adopter on another provider back to the command and the contract", () => {
+  // The spec's own line: README says what a host needs, not which vendor. This
+  // is the one recipe, so it has to say out loud that it is an example of the
+  // contract above it rather than the way the heartbeat is run.
+  const text = recipe();
+  assert.match(text, /provider/i, "the recipe says another provider works too");
+  assert.match(text, /what any host needs/i, "the recipe sends an adopter on another provider to the host contract");
+});

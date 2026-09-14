@@ -56,6 +56,16 @@ A target repo on GitHub, plus:
    - **A healthchecks.io check, and its ping URL in `FACTORY_HEARTBEAT_PING_URL`**, set in the command's environment beside `GH_TOKEN`. The sender reports each pass's exit status to it, so a failed pass alerts at once and a dead host alerts once the check's period and grace run out; give the check a period of the interval and a grace of about ten minutes. Leave the variable unset and no ping is sent.
    - **Not a GitHub cron**, which was measured firing a small fraction of the times it should and was taken out of the caller for it (`docs/factory/dispatcher.md` has the measurement).
 
+   **No always-on machine: run it on Render.** The repo carries the whole recipe: `deploy/render/Dockerfile` is the image (Node, `gh`, this repo, the command above), and `render.yaml` at the root is the blueprint — one cron job on the Starter plan, auto-deploying `main`, whose schedule CI holds to the repo's interval. Three steps, in this order:
+
+   1. **Make the healthchecks.io check.** Period the interval, grace about ten minutes. Copy its ping URL; it is the second of the two secrets below.
+   2. **Create the environment group.** Render → Env Groups → New, named `tomte-heartbeat`, holding `GH_TOKEN` (the heartbeat's own token, scoped as above) and `FACTORY_HEARTBEAT_PING_URL` (that ping URL). The blueprint states no value itself and takes both from this group, so it has to exist first: deploy without it and every pass fails for want of a token.
+   3. **Deploy the blueprint.** Render → New → Blueprint, pointed at your copy of this repo. It reads `render.yaml`, builds the image and creates the cron job; every merge to `main` redeploys it, so the host runs the repo as merged and never a branch.
+
+   **What it costs.** About $1 a month: Render's monthly minimum per cron service. The compute is well under it — one pass per interval, seconds of a container each — so the minimum is the bill rather than the usage, and it stays the same however many targets one sender covers. No Actions minutes on either count, and the private-repo minutes a woken sweep bills on each target are the same on any host.
+
+   **On another provider,** the recipe is the same image or, with none, the same command: a scheduler that runs `node --experimental-strip-types factory/heartbeat/send.ts` once per interval against a checkout of `main`, with the token and the ping URL in its environment, is a host. **What any host needs** above is the contract, and Render is one worked example of it.
+
 Then label a ticket `ready-for-agent` and the pipeline above runs. To hold a ready ticket back, add `hold`. Labeling `agent:implement` by hand also works.
 
 **Two conditional extras**, both in `docs/factory/caller-inputs.md`: a target with two kinds of test needs a **routing test command** (`templates/routing-test-command.sh`), and any producer opening its own PR (an interactive session, a cloud agent) needs the judged-path line (`templates/agents-md-judged-path.md`) in its `AGENTS.md`; its branch has to be in the target, not a fork, or the PR is refused.
