@@ -601,3 +601,93 @@ test("a pass whose targets all succeed tells the dead-man's switch it exited 0",
     assert.deepEqual(server.paths, ["/a-check-uuid/0"]);
   });
 });
+
+test("a pass with a failed target tells the switch the status it failed with", async () => {
+  // Acceptance criterion 2 (#325): the exit status and not a bare "alive", so a
+  // failed pass alerts at once instead of waiting out the check's grace for a
+  // pass that does arrive. An unreadable pause is the failure this reaches for
+  // because it is the one a host really sees, a token whose Actions variables
+  // read lapsed.
+  await withPingServer(async (server) => {
+    const { stdout, status } = await passAgainstStub({ paused: "fail", pingUrl: server.url });
+    assert.equal(status, 1, stdout);
+    assert.deepEqual(server.paths, [`/a-check-uuid/${status}`]);
+  });
+});
+
+test("a host with no switch configured sends nothing, and its pass is otherwise unchanged", async () => {
+  // Acceptance criterion 3 (#325). Unset is every host until somebody makes a
+  // check, so the sender may not require one: the server is up and listening
+  // here precisely so that a ping sent to some default would be recorded rather
+  // than silently failing to connect.
+  await withPingServer(async (server) => {
+    const { stdout, status } = await passAgainstStub({});
+    assert.equal(status, 0, stdout);
+    assert.deepEqual(server.paths, []);
+    assert.match(stdout, literal(`${TARGET_REPOS.length} target(s), 0 woken, ${TARGET_REPOS.length} skipped, 0 paused, 0 failed`));
+  });
+});
+
+test("a dry run tells the switch nothing, so trying the command never marks the check up", async () => {
+  // Acceptance criterion 4 (#325). A dry run reads no target and invents its
+  // answers, so a maintainer trying the command out would otherwise report a
+  // green pass for a sweep that never happened, and a host that had actually
+  // died would look alive for as long as somebody kept trying it.
+  await withPingServer(async (server) => {
+    const { stdout, status } = await passAgainstStub({ dryRun: true, pingUrl: server.url });
+    assert.equal(status, 0, stdout);
+    assert.deepEqual(server.paths, []);
+    assert.match(stdout, literal("(dry run)"));
+  });
+});
+
+/** A pass's lines with the timestamp off the front of each, so two passes can be compared. */
+const outcomeLines = (stdout: string): string[] => stdout.split("\n").filter(Boolean).map((line) => line.replace(/^\S+ /, ""));
+
+/** A URL nothing answers on: a server bound to a free port and then shut, so the port is known and closed. */
+const unreachableUrl = async (): Promise<string> => {
+  const server = await pingServer();
+  await server.close();
+  return server.url;
+};
+
+test("a switch nothing answers on costs the pass nothing but a line on stderr", async () => {
+  // Acceptance criterion 5 (#325), the unreachable half. Watching the heartbeat
+  // may not be what stops it: a monitoring outage, a mistyped URL or a
+  // healthchecks.io incident leaves the pass exactly as it was without a switch
+  // configured at all, which is what the comparison below pins.
+  const without = await passAgainstStub({});
+  const { stdout, stderr, status } = await passAgainstStub({ pingUrl: await unreachableUrl() });
+  assert.equal(status, without.status, stderr);
+  assert.deepEqual(outcomeLines(stdout), outcomeLines(without.stdout));
+  // Said out loud, and naming the variable to look in, since nothing else will
+  // ever mention a switch that is not being reached.
+  assert.match(stderr, literal(PING_URL_ENV));
+});
+
+test("a switch that never answers gives up quickly and leaves the pass unchanged", async () => {
+  // Acceptance criterion 5 (#325), the slow half, and the one that is not the
+  // same failure: an unreachable port is refused at once, while a switch that
+  // accepts the connection and then says nothing would hold the pass open
+  // forever. On a host that runs one pass at a time that is the next pass lost
+  // too, so the timeout is what keeps a slow switch from becoming a dead
+  // heartbeat.
+  const without = await passAgainstStub({});
+  await withPingServer(
+    async (server) => {
+      const startedAt = Date.now();
+      const { stdout, stderr, status } = await passAgainstStub({ pingUrl: server.url });
+      const elapsed = Date.now() - startedAt;
+      assert.equal(status, without.status, stderr);
+      assert.deepEqual(outcomeLines(stdout), outcomeLines(without.stdout));
+      assert.match(stderr, literal(PING_URL_ENV));
+      // The request arrived and was simply never answered, so this is the
+      // timeout firing rather than a ping that was never sent.
+      assert.deepEqual(server.paths, ["/a-check-uuid/0"]);
+      assert.ok(elapsed < PING_TIMEOUT_MS * 3, `the pass waited ${elapsed}ms on a switch that never answered`);
+    },
+    // Answered by nothing at all: the request is taken and the response never
+    // written, which is the shape a hung server or a black-holed route takes.
+    () => {},
+  );
+});
