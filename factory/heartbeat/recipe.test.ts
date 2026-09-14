@@ -19,7 +19,6 @@ import * as fs from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { HEARTBEAT_INTERVAL_MINUTES } from "./interval.ts";
 import { PING_URL_ENV } from "./ping.ts";
 import { BLUEPRINT, ENV_GROUP, IMAGE, blueprint, blueprintSetting, image, minutesBetweenRuns } from "./recipe.ts";
 
@@ -38,6 +37,14 @@ test("the cron reader tells a schedule that runs at one gap from one that only l
     ["0,30 * * * *", 30],
     ["0-59/20 * * * *", 20],
     ["*/15 * * * *", 15],
+    // A step with no range of its own, which runs to the end of the hour: read
+    // as its start alone this is one run an hour, and a blueprint running twice
+    // as often as the repo documents would pass on an hourly interval.
+    ["0/30 * * * *", 30],
+    ["0/20 * * * *", 20],
+    // And a step that does have a range keeps it: this stops at 20, so it is a
+    // run at 0 and 20 and then forty minutes of nothing.
+    ["0-20/20 * * * *", undefined],
     // Once an hour, whichever minute it lands on: a gap of sixty.
     ["7 * * * *", 60],
     // The near misses, which are the reason the gaps are measured.
@@ -49,6 +56,9 @@ test("the cron reader tells a schedule that runs at one gap from one that only l
     ["*/30 * * *", undefined],
     ["@hourly", undefined],
     ["", undefined],
+    // A range end on a wildcard is not a field any cron reads, so it is not
+    // read here either rather than answered for as plain `*`.
+    ["*-5 * * * *", undefined],
   ];
   for (const [schedule, gap] of read) assert.equal(minutesBetweenRuns(schedule), gap, `"${schedule}" was read wrong`);
 });

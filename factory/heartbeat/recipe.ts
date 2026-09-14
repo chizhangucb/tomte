@@ -77,17 +77,24 @@ export const blueprintSchedule = (text: string = blueprint()): string => {
  * Every minute of the hour a cron minute field fires on, sorted, or undefined
  * for a field this cannot read. `*`, `a`, `a,b`, `a-b` and a `/n` step on any
  * of those are the shapes a blueprint is written in; anything else (a name, a
- * `?`, a minute outside the hour) is not read rather than guessed at, because
- * a guess here would be a schedule nobody checked.
+ * `?`, a range end on a wildcard, a minute outside the hour) is not read
+ * rather than guessed at, because a guess here would be a schedule nobody
+ * checked.
+ *
+ * A step with no range of its own runs to the end of the hour, which is how
+ * every cron reads it: `0/30` fires at 0 and 30, not once at 0. Reading it as
+ * its start alone would call a schedule half as slow as it runs, which on an
+ * hourly interval is a blueprint running twice as often as the repo documents
+ * and passing anyway.
  */
 const cronMinutes = (field: string): number[] | undefined => {
   const fired = new Set<number>();
   for (const term of field.split(",")) {
-    const match = /^(\*|\d{1,2})(?:-(\d{1,2}))?(?:\/(\d{1,2}))?$/.exec(term);
+    const match = /^(?:(\*)|(\d{1,2})(?:-(\d{1,2}))?)(?:\/(\d{1,2}))?$/.exec(term);
     if (!match) return undefined;
-    const [, from, to, step] = match;
-    const first = from === "*" ? 0 : Number(from);
-    const last = from === "*" ? 59 : to === undefined ? first : Number(to);
+    const [, star, from, to, step] = match;
+    const first = star ? 0 : Number(from);
+    const last = to !== undefined ? Number(to) : star || step !== undefined ? 59 : first;
     const by = step === undefined ? 1 : Number(step);
     if (by < 1 || last < first || last > 59) return undefined;
     for (let minute = first; minute <= last; minute += by) fired.add(minute);
