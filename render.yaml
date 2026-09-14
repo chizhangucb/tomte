@@ -1,0 +1,30 @@
+# The Render recipe for the heartbeat (#327): one cron job that runs one pass
+# of the sender on the repo's interval, for Render's per-service monthly
+# minimum and no Actions minutes. README's cloud recipe says how it is
+# deployed; `deploy/render/Dockerfile` is what it runs.
+#
+# The schedule below is the one copy of the interval outside this repo's reach:
+# a scheduler is told a number, and no amount of deferring in prose makes
+# Render read `factory/heartbeat/interval.ts`. `factory/heartbeat/send.test.ts`
+# holds the two together, so moving the interval fails the suite until this
+# line moves with it. That test is also the only thing watching this number:
+# a cron job's container is fresh for every run and keeps no disk, so the
+# sender's pass log never survives a pass here and the cadence claim it makes
+# (#265) cannot fire on this host. A schedule that is too slow is caught by the
+# check instead, once its period and grace run out.
+services:
+  - type: cron
+    name: heartbeat
+    runtime: docker
+    plan: starter
+    branch: main
+    autoDeploy: true
+    dockerfilePath: ./deploy/render/Dockerfile
+    dockerContext: .
+    schedule: "*/30 * * * *"
+    # Every value the job runs on comes from an environment group a maintainer
+    # creates in Render before deploying, so the token and the check's URL have
+    # nowhere in this file to be typed into. A forgotten group is a service
+    # whose first pass fails loudly, which is the failure to want.
+    envVars:
+      - fromGroup: tomte-heartbeat

@@ -1,0 +1,5 @@
+# The image carries the repo as merged and installs nothing, so a build context
+# that also carried the clone's history or a local `npm ci` would be megabytes
+# of image nothing in a pass ever reads.
+.git
+node_modules

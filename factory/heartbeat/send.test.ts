@@ -26,6 +26,7 @@ import { fileURLToPath } from "node:url";
 import { IMPLEMENT_LABEL } from "../lib/labels.ts";
 import { HEARTBEAT_INTERVAL_MINUTES, INTERVAL_PHRASE } from "./interval.ts";
 import { PING_TIMEOUT_MS, PING_URL_ENV } from "./ping.ts";
+import { BLUEPRINT, blueprint, blueprintSchedule, minutesBetweenRuns } from "./recipe.ts";
 import { TARGET_REPOS } from "./targets.ts";
 import { PAUSE, WAIVER } from "./variable.ts";
 
@@ -596,6 +597,27 @@ test("no file names the pass log or the cadence claim, which the sender no longe
     for (const name of REMOVED_WITH_THE_PASS_LOG) if (text.includes(name.toLowerCase())) naming.push(`${file} ("${name}")`);
   }
   assert.deepEqual(naming, [], `these name state the sender no longer keeps: ${naming.join(", ")}`);
+});
+
+test("the Render blueprint runs the sender every interval, which is the one scheduler copy of it", () => {
+  // The same seam as the scan above, for the copy that cannot be deferred
+  // away: Render is told a number, and no amount of naming the interval in
+  // prose makes it read `interval.ts`. Asserted against the constant, so
+  // moving the interval fails here and the blueprint moves in the same commit.
+  const schedule = blueprintSchedule();
+  assert.equal(
+    minutesBetweenRuns(schedule),
+    HEARTBEAT_INTERVAL_MINUTES,
+    `${BLUEPRINT} is scheduled "${schedule}" and the interval is ${INTERVAL_PHRASE}`,
+  );
+  // And it is the number being held rather than the file's mere existence: the
+  // real blueprint with another number in it is what this has to reject, a
+  // drifted blueprint being exactly one that is otherwise well-formed.
+  for (const other of ["*/5 * * * *", "0,20,40 * * * *", "0 * * * *"]) {
+    const doctored = blueprint().replace(schedule, other);
+    assert.equal(blueprintSchedule(doctored), other, `"${other}" left the blueprint unchanged`);
+    assert.notEqual(minutesBetweenRuns(other), HEARTBEAT_INTERVAL_MINUTES, `a blueprint set to "${other}" passed`);
+  }
 });
 
 test("both pages say what a pause stops, what it does not, and that the heartbeat is what stops waking the target", () => {
