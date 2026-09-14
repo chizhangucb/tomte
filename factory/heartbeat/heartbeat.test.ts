@@ -231,8 +231,7 @@ test("a paused target is told from an idle one, so a forgotten pause is visible 
 
 test("a target with the pause lifted is woken on the next pass, with nothing else done to it", () => {
   // Acceptance criterion 3. No decision is carried between passes, so the only
-  // thing a resume needs is the variable gone (the pass log #265 keeps is the
-  // sender's own and decides nothing about a target).
+  // thing a resume needs is the variable gone.
   const pass = (reason: string | undefined): { woken: string[]; outcomes: TargetOutcome[] } => {
     const woken: string[] = [];
     const outcomes = sendHeartbeat({
