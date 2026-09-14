@@ -56,6 +56,56 @@ A target repo on GitHub, plus:
    - **A healthchecks.io check, and its ping URL in `FACTORY_HEARTBEAT_PING_URL`**, set in the command's environment beside `GH_TOKEN`. The sender reports each pass's exit status to it, so a failed pass alerts at once and a dead host alerts once the check's period and grace run out; give the check a period of the interval and a grace of about ten minutes. Leave the variable unset and no ping is sent.
    - **Not a GitHub cron**, which was measured firing a small fraction of the times it should and was taken out of the caller for it (`docs/factory/dispatcher.md` has the measurement).
 
+   **On your own always-on machine.** One script, kept alive, and the machine carries no interval at all:
+
+   ```
+   git clone https://github.com/chizhangucb/tomte.git ~/tomte-heartbeat   # a clone of its own, left on main
+   GH_TOKEN=<token> FACTORY_HEARTBEAT_PING_URL=<ping url> ~/tomte-heartbeat/scripts/heartbeat-loop.sh
+   ```
+
+   Each pass fast-forward pulls `main`, runs the sender, then sleeps the interval it reads back out of `factory/heartbeat/interval.ts`, so a merged fix, a target added to `targets.ts` and a moved interval all reach the heartbeat on the next pass with nothing edited on the host. A failed pull or a failed pass is a line on stderr and the next pass runs anyway. Three things make it a recipe rather than a command that happens to run:
+
+   - **A clone of its own**, kept on `main` and never a working checkout you also open sessions in: the loop pulls, and a branch left behind in a shared clone would change what sweeps your targets.
+   - **The heartbeat's scoped token in `GH_TOKEN`**, and the check's URL in `FACTORY_HEARTBEAT_PING_URL`, both set in the loop's environment — it passes them through to each pass untouched, so the host holds no credential the pass does not use.
+   - **Sleep off**, `sudo pmset -a sleep 0 disablesleep 1` on a Mac or `sudo systemctl mask sleep.target suspend.target` on Linux: a sleeping host runs no pass, and the dead-man's switch is what would tell you, hours later.
+
+   Then the host's only job is keeping the loop alive. launchd, `~/Library/LaunchAgents/dev.you.tomte-heartbeat.plist`, then `launchctl load` it:
+
+   ```xml
+   <?xml version="1.0" encoding="UTF-8"?>
+   <plist version="1.0"><dict>
+     <key>Label</key><string>dev.you.tomte-heartbeat</string>
+     <key>ProgramArguments</key><array><string>/Users/you/tomte-heartbeat/scripts/heartbeat-loop.sh</string></array>
+     <key>EnvironmentVariables</key><dict>
+       <key>GH_TOKEN</key><string>github_pat_...</string>
+       <key>FACTORY_HEARTBEAT_PING_URL</key><string>https://hc-ping.com/...</string>
+     </dict>
+     <key>KeepAlive</key><true/>
+     <key>RunAtLoad</key><true/>
+     <key>StandardOutPath</key><string>/Users/you/Library/Logs/tomte-heartbeat.log</string>
+     <key>StandardErrorPath</key><string>/Users/you/Library/Logs/tomte-heartbeat.log</string>
+   </dict></plist>
+   ```
+
+   systemd, `~/.config/systemd/user/tomte-heartbeat.service`, then `systemctl --user enable --now tomte-heartbeat` (and `loginctl enable-linger you`, so it runs while you are logged out):
+
+   ```ini
+   [Unit]
+   Description=tomte heartbeat loop
+
+   [Service]
+   ExecStart=/home/you/tomte-heartbeat/scripts/heartbeat-loop.sh
+   Environment=GH_TOKEN=github_pat_...
+   Environment=FACTORY_HEARTBEAT_PING_URL=https://hc-ping.com/...
+   Restart=always
+   RestartSec=60
+
+   [Install]
+   WantedBy=default.target
+   ```
+
+   Neither says how often to run anything, and neither is a timer: the repo's constant is the only copy of that number, and restarting the loop is the whole of what the host owes it. `RestartSec` is how long systemd waits before restarting a loop that died, not how often a pass runs, and it is there because the default start limit gives up on a unit that exits five times in ten seconds — which is what a host with no `node` on its `PATH` would do. Both hand the loop the keep-alive's own `PATH`, which is a short one and holds none of `node`, `git` or `gh` as nvm or Homebrew installed them — set `PATH` in the example's environment, all three, since they fail differently: without `node` the loop stops on its first pass saying it could not read the interval, while without `git` or `gh` it runs forever, every pull or every pass failing. Keep the log outside the clone, as both examples do: the loop pulls into that clone with `--ff-only`, so the day a merge adds a file where the log sits the pull is refused and the host is stuck on the code it has until somebody moves it.
+
    **No always-on machine: run it on Render.** The repo carries the whole recipe: `deploy/render/Dockerfile` is the image (Node, `gh`, this repo, the command above), and `render.yaml` at the root is the blueprint — one cron job on the Starter plan, auto-deploying `main`, whose schedule CI holds to the repo's interval. Three steps, in this order:
 
    1. **Make the healthchecks.io check.** Period the interval, grace about ten minutes. Copy its ping URL; it is the second of the two secrets below.
