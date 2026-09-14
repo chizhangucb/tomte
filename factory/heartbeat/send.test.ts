@@ -688,6 +688,11 @@ test("a switch nothing answers on costs the pass nothing but a line on stderr", 
   // Said out loud, and naming the variable to look in, since nothing else will
   // ever mention a switch that is not being reached.
   assert.match(stderr, literal(PING_URL_ENV));
+  // And saying which failure it was. `fetch` renders every transport failure as
+  // the same "fetch failed" and hangs the reason off `cause`, so a line that
+  // stops there tells an operator nothing a refused port, an unknown host and a
+  // bad certificate do not all say.
+  assert.match(stderr, /fetch failed: \S/, `the line does not say why the switch could not be reached: ${stderr}`);
 });
 
 /**

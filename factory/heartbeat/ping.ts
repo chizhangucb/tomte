@@ -83,6 +83,19 @@ const switchOrigin = (url: string): string => {
 const couldNotTell = (url: string, cause: string): string => `could not tell the dead-man's switch at ${switchOrigin(url)}: ${cause}`;
 
 /**
+ * Why the request failed, in the words an operator can act on. `fetch` renders
+ * every transport failure as the same "fetch failed" and hangs the real reason
+ * off `cause`, so a refused connection, an unknown host and a bad certificate
+ * all read alike without it -- and this line is the only report a failed ping
+ * ever makes.
+ */
+const why = (error: unknown): string => {
+  const message = errorMessage(error);
+  const cause = error instanceof Error && error.cause !== undefined ? errorMessage(error.cause) : "";
+  return cause && !message.includes(cause) ? `${message}: ${cause}` : message;
+};
+
+/**
  * Tell the switch how the pass went, if the host configured one. Answers with
  * the line the caller should put on stderr, or nothing when there was nothing
  * to say: it never throws and never decides the pass's exit status, so the
@@ -106,6 +119,6 @@ export const reportPass = async (configured: string | undefined, exitStatus: num
     // watching rather than one that is merely unreachable.
     return response.ok ? undefined : couldNotTell(url, `HTTP ${response.status}`);
   } catch (error) {
-    return couldNotTell(url, errorMessage(error));
+    return couldNotTell(url, why(error));
   }
 };
