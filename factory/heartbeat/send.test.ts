@@ -500,6 +500,118 @@ test("no other page or module restates the interval, so there is one copy to kee
   assert.deepEqual(restating, [], `these state the heartbeat's cadence instead of naming the interval: ${restating.join(", ")}`);
 });
 
+/**
+ * The Render blueprint (#327), which is the one copy of the interval this repo
+ * cannot talk out of existing: a cron scheduler is told a schedule, and no
+ * amount of deferring in prose makes Render read `interval.ts`. It is tracked
+ * here so the copy is held to the constant by the same seam that keeps every
+ * page off it.
+ */
+const BLUEPRINT = "render.yaml";
+
+/**
+ * Every minute of the hour a cron minute field fires on, sorted, or undefined
+ * for a field this cannot read. `*`, `a`, `a,b`, `a-b` and a `/n` step on any
+ * of those are the shapes a blueprint is written in; anything else (a name, a
+ * `?`, a minute outside the hour) is not read rather than guessed at, because a
+ * guess here would be a schedule nobody checked.
+ */
+const cronMinutes = (field: string): number[] | undefined => {
+  const fired = new Set<number>();
+  for (const term of field.split(",")) {
+    const match = /^(\*|\d{1,2})(?:-(\d{1,2}))?(?:\/(\d{1,2}))?$/.exec(term);
+    if (!match) return undefined;
+    const [, from, to, step] = match;
+    const first = from === "*" ? 0 : Number(from);
+    const last = from === "*" ? 59 : to === undefined ? first : Number(to);
+    const by = step === undefined ? 1 : Number(step);
+    if (by < 1 || last < first || last > 59) return undefined;
+    for (let minute = first; minute <= last; minute += by) fired.add(minute);
+  }
+  return [...fired].sort((a, b) => a - b);
+};
+
+/**
+ * How many minutes a five-field cron expression leaves between its runs, or
+ * undefined when it does not run at one fixed gap the clock round.
+ *
+ * The gaps are measured rather than read off the step, because a step of seven
+ * is not every seven minutes -- it fires at 0 and again at 56 and then waits
+ * four -- and `0,45` is not every 45. Both are schedules a maintainer writes
+ * meaning the interval, and a reader that took the step at its word would call
+ * each of them what it is not.
+ */
+const minutesBetweenRuns = (schedule: string): number | undefined => {
+  const fields = schedule.trim().split(/\s+/);
+  // Anything below the hour that is not a wildcard is a schedule that skips
+  // hours, days or weekdays, which is not an interval however its minutes read.
+  if (fields.length !== 5 || !fields.slice(1).every((field) => field === "*")) return undefined;
+  const minutes = cronMinutes(fields[0]!);
+  if (!minutes || minutes.length === 0) return undefined;
+  // Round the clock, so the wrap past the hour is a gap like any other: a
+  // schedule whose last run of the hour is far from the first one is not
+  // running at that gap, whatever its runs inside the hour look like.
+  const gaps = minutes.map((minute, index) => (index + 1 < minutes.length ? minutes[index + 1]! - minute : 60 - minute + minutes[0]!));
+  return gaps.every((gap) => gap === gaps[0]) ? gaps[0] : undefined;
+};
+
+/**
+ * The schedule the blueprint's one cron job is set to. It insists on one cron
+ * service and one schedule: a blueprint that grew a second job would have the
+ * assertion below judging whichever one this happened to return.
+ */
+const blueprintSchedule = (blueprint: string): string => {
+  const jobs = [...blueprint.matchAll(/^\s*-?\s*type:\s*cron\s*$/gm)];
+  assert.equal(jobs.length, 1, `${BLUEPRINT} declares one cron job`);
+  const schedules = [...blueprint.matchAll(/^\s*schedule:\s*"?([^"\n#]+?)"?\s*(?:#.*)?$/gm)].map(([, schedule]) => schedule!);
+  assert.equal(schedules.length, 1, `${BLUEPRINT} states one schedule`);
+  return schedules[0]!;
+};
+
+test("the cron reader tells a schedule that runs at one gap from one that only looks like it", () => {
+  // The positive control, as the cadence scanner above has one: an assertion
+  // about a schedule is only evidence if the reader is known to tell the
+  // schedules apart. Every shape here is one a blueprint gets written in.
+  const read: [string, number | undefined][] = [
+    ["*/30 * * * *", 30],
+    ["0,30 * * * *", 30],
+    ["0-59/20 * * * *", 20],
+    ["*/15 * * * *", 15],
+    // Once an hour, whichever minute it lands on: a gap of sixty.
+    ["7 * * * *", 60],
+    // The near misses, which are the reason the gaps are measured.
+    ["*/7 * * * *", undefined],
+    ["0,45 * * * *", undefined],
+    // And the ones that are not an interval at all.
+    ["*/30 2 * * *", undefined],
+    ["*/30 * * * 1", undefined],
+    ["*/30 * * *", undefined],
+    ["@hourly", undefined],
+    ["", undefined],
+  ];
+  for (const [schedule, gap] of read) assert.equal(minutesBetweenRuns(schedule), gap, `"${schedule}" was read wrong`);
+});
+
+test("the Render blueprint runs the sender every interval, which is the one scheduler copy of it", () => {
+  // The same seam as the scan above, for the copy that cannot be deferred
+  // away. Asserted against the constant, so moving the interval fails here and
+  // the blueprint moves in the same commit.
+  const blueprint = fs.readFileSync(new URL(BLUEPRINT, repoRoot), "utf8");
+  assert.equal(
+    minutesBetweenRuns(blueprintSchedule(blueprint)),
+    HEARTBEAT_INTERVAL_MINUTES,
+    `${BLUEPRINT} is scheduled "${blueprintSchedule(blueprint)}" and the interval is ${INTERVAL_PHRASE}`,
+  );
+  // And it is the number that is being held, not the file's mere existence: the
+  // real blueprint with another number in it is what this has to reject, since
+  // a drifted blueprint is exactly a blueprint that is otherwise well-formed.
+  for (const other of ["*/5 * * * *", "0,20,40 * * * *", "0 * * * *"]) {
+    const doctored = blueprint.replace(blueprintSchedule(blueprint), other);
+    assert.notEqual(blueprintSchedule(doctored), blueprintSchedule(blueprint), `"${other}" left the blueprint unchanged`);
+    assert.notEqual(minutesBetweenRuns(blueprintSchedule(doctored)), HEARTBEAT_INTERVAL_MINUTES, `a blueprint set to "${other}" passed`);
+  }
+});
+
 test("both pages say what a pause stops, what it does not, and that the heartbeat is what stops waking the target", () => {
   // Acceptance criterion 7. A maintainer reaches for the pause in an incident
   // and reads one of these two pages, so each has to carry the whole shape on
