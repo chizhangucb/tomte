@@ -5,7 +5,7 @@
 # sender, then a sleep of whatever `factory/heartbeat/interval.ts` says, read back through
 # `node` after every pull. So a merged fix, a target added to `targets.ts` and a moved
 # interval all reach the heartbeat on the next pass with nothing edited on the host, which
-# is the whole reason the host runs a loop instead of a scheduler (#324).
+# is the whole reason the host runs a loop instead of a scheduler (#326, from the spec #324).
 # The host's only job is keeping this alive: launchd `KeepAlive`, systemd `Restart=always`,
 # README's own-machine recipe. Run it from a clone kept on `main` and used for nothing else;
 # it pulls, so a session that left a branch checked out would change what sweeps the targets.

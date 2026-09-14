@@ -98,12 +98,13 @@ A target repo on GitHub, plus:
    Environment=GH_TOKEN=github_pat_...
    Environment=FACTORY_HEARTBEAT_PING_URL=https://hc-ping.com/...
    Restart=always
+   RestartSec=60
 
    [Install]
    WantedBy=default.target
    ```
 
-   Neither says how often to run anything, and neither is a timer: the repo's constant is the only copy of that number, and restarting the loop is the whole of what the host owes it. Both hand the loop the keep-alive's own `PATH`, which is a short one — if `node` or `git` came from nvm, Homebrew or anywhere else, name them in the example's environment too, or the loop stops on its first pass saying it could not read the interval. Keep the log outside the clone, as both examples do: the loop pulls into that clone, and a log written inside it is a file `--ff-only` will trip over.
+   Neither says how often to run anything, and neither is a timer: the repo's constant is the only copy of that number, and restarting the loop is the whole of what the host owes it. `RestartSec` is how long systemd waits before restarting a loop that died, not how often a pass runs, and it is there because the default start limit gives up on a unit that exits five times in ten seconds — which is what a host with no `node` on its `PATH` would do. Both hand the loop the keep-alive's own `PATH`, which is a short one and holds none of `node`, `git` or `gh` as nvm or Homebrew installed them — set `PATH` in the example's environment, all three, since they fail differently: without `node` the loop stops on its first pass saying it could not read the interval, while without `git` or `gh` it runs forever, every pull or every pass failing. Keep the log outside the clone, as both examples do: the loop pulls into that clone with `--ff-only`, so the day a merge adds a file where the log sits the pull is refused and the host is stuck on the code it has until somebody moves it.
 
 Then label a ticket `ready-for-agent` and the pipeline above runs. To hold a ready ticket back, add `hold`. Labeling `agent:implement` by hand also works.
 
