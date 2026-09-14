@@ -24,7 +24,6 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { IMPLEMENT_LABEL } from "../lib/labels.ts";
-import { DISAGREEING_PASSES, PASS_LOG_ENV } from "./cadence.ts";
 import { HEARTBEAT_INTERVAL_MINUTES, INTERVAL_PHRASE } from "./interval.ts";
 import { PING_TIMEOUT_MS, PING_URL_ENV } from "./ping.ts";
 import { TARGET_REPOS } from "./targets.ts";
@@ -37,6 +36,8 @@ const repoRoot = new URL("../../", import.meta.url);
 const ENTRYPOINT = "factory/heartbeat/send.ts";
 /** The loop runner, which carries no interval of its own and so is one of the files the scan below owns (#326). */
 const LOOP_RUNNER = "scripts/heartbeat-loop.sh";
+/** This file, which the repo-wide scans below exempt: it spells what it refuses. */
+const SCANNER = "factory/heartbeat/send.test.ts";
 /** The env var the host passes the token in, which is the one `gh` itself reads. */
 const TOKEN_ENV = "GH_TOKEN";
 /** The pages a maintainer onboards a target from, named as `dispatch/triggers.test.ts` names its own sites. */
@@ -144,8 +145,7 @@ const passAgainstStub = async ({
   waived = "",
   paused = "",
   variablesReadable = true,
-  passLog = "",
-  unwritablePassLog = false,
+  home = "",
   open = "",
   pingUrl = "",
   dryRun = false,
@@ -153,20 +153,16 @@ const passAgainstStub = async ({
   waived?: string;
   paused?: string;
   variablesReadable?: boolean;
-  /** The pass log the cadence claim reads (#265), always under the temp dir: a test never touches a real host's. */
-  passLog?: string;
-  /** Point the pass log at a directory that does not exist, which is every way a host cannot keep it. */
-  unwritablePassLog?: boolean;
+  /** A home directory of the pass's own, so what the pass leaves on a host's disk is exactly what is in this directory afterwards. */
+  home?: string;
   /** The open-work read's answer: projected items, one JSON line each. Empty is a target with nothing open. */
   open?: string;
   /** The dead-man's switch the pass reports to (#325). Empty is a host with none configured. */
   pingUrl?: string;
   /** Run the pass the way a maintainer trying the command does, which touches no target and pings nothing. */
   dryRun?: boolean;
-}): Promise<{ stdout: string; stderr: string; status: number; passLog: string }> => {
+}): Promise<{ stdout: string; stderr: string; status: number }> => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "heartbeat-"));
-  const passLogFile = unwritablePassLog ? path.join(dir, "no-such-directory", "passes") : path.join(dir, "passes");
-  if (passLog) fs.writeFileSync(passLogFile, passLog);
   fs.writeFileSync(
     path.join(dir, "gh"),
     `#!/usr/bin/env bash
@@ -186,11 +182,11 @@ exit 0
 `,
     { mode: 0o755 },
   );
-  const result = await run({
+  return run({
     ...process.env,
     PATH: `${dir}:${process.env.PATH}`,
     DRY_RUN: dryRun ? "1" : "",
-    [PASS_LOG_ENV]: passLogFile,
+    ...(home ? { HOME: home } : {}),
     [PING_URL_ENV]: pingUrl,
     GH_WAIVED: waived,
     GH_PAUSED: paused,
@@ -199,7 +195,6 @@ exit 0
     // that has no variables at all: an answer, and not the absence of one.
     GH_VARS_LIST: variablesReadable ? "0" : "",
   });
-  return { ...result, passLog: fs.existsSync(passLogFile) ? fs.readFileSync(passLogFile, "utf8") : "" };
 };
 
 /**
@@ -473,7 +468,7 @@ test("no other page or module restates the interval, so there is one copy to kee
   // recording that GitHub's own cron was removed from the caller (#270) or
   // naming the daily recheck's cadence (#267) is not flagged as a second copy
   // of the heartbeat interval, neither being that number.
-  const skipped = new Set(["factory/heartbeat/interval.ts", "factory/heartbeat/interval.test.ts", "factory/heartbeat/send.test.ts"]);
+  const skipped = new Set(["factory/heartbeat/interval.ts", "factory/heartbeat/interval.test.ts", SCANNER]);
   const tracked = execFileSync("git", ["ls-files", "-z"], { cwd: fileURLToPath(repoRoot), encoding: "utf8" }).split("\0").filter(Boolean);
   assert.ok(tracked.length > 0, "the walk found no tracked files at all");
   const restating: string[] = [];
@@ -516,6 +511,50 @@ test("no other page or module restates the interval, so there is one copy to kee
   assert.deepEqual(restating, [], `these state the heartbeat's cadence instead of naming the interval: ${restating.join(", ")}`);
 });
 
+/**
+ * The state the sender kept and the claim it made from it (#265), by every name
+ * a file could still reach them under (#328): the module, its exports, the
+ * variable that moved the file and the file's own default path, and the two
+ * terms CONTEXT.md gave them. Removed because the loop runner leaves an
+ * always-on host with no second copy of the interval to drift from, a cloud
+ * scheduler never persisted the file for a claim to be made from, and a
+ * scheduler set too slow trips the dead-man's switch instead.
+ *
+ * Names and not a scan for the word "cadence": this repo uses it of the daily
+ * recheck (#267) and of the interval the scan above owns, and a test that
+ * refused the word would refuse those too.
+ */
+const REMOVED_WITH_THE_PASS_LOG = [
+  "FACTORY_HEARTBEAT_PASS_LOG",
+  ".factory-heartbeat-passes",
+  "cadence.ts",
+  "cadenceLine",
+  "passLogPath",
+  "DISAGREEING_PASSES",
+  "AGREEING_BAND",
+  "pass log",
+  "cadence claim",
+];
+
+test("no file names the pass log or the cadence claim, which the sender no longer keeps", () => {
+  // Acceptance criterion 1 (#328). The code going is half of a removal; the
+  // other half is that nothing goes on describing it, because a doc naming a
+  // file the sender never writes sends a maintainer hunting state that is not
+  // there. Over every tracked file and not the heartbeat's own directory,
+  // since CONTEXT.md, the dispatcher page and a comment in `heartbeat.test.ts`
+  // each carried a copy of the description.
+  const tracked = execFileSync("git", ["ls-files", "-z"], { cwd: fileURLToPath(repoRoot), encoding: "utf8" }).split("\0").filter(Boolean);
+  assert.ok(tracked.length > 0, "the walk found no tracked files at all");
+  const naming: string[] = [];
+  for (const file of tracked) {
+    // This file alone, which has to spell the names in order to refuse them.
+    if (file === SCANNER) continue;
+    const text = fs.readFileSync(new URL(file, repoRoot), "utf8");
+    for (const name of REMOVED_WITH_THE_PASS_LOG) if (text.includes(name)) naming.push(`${file} ("${name}")`);
+  }
+  assert.deepEqual(naming, [], `these name state the sender no longer keeps: ${naming.join(", ")}`);
+});
+
 test("both pages say what a pause stops, what it does not, and that the heartbeat is what stops waking the target", () => {
   // Acceptance criterion 7. A maintainer reaches for the pause in an incident
   // and reads one of these two pages, so each has to carry the whole shape on
@@ -543,73 +582,17 @@ test("both pages say what a pause stops, what it does not, and that the heartbea
   }
 });
 
-/** A pass log ending one gap before now, every gap the same, long enough to hold a run. */
-const recentPasses = (gapMinutes: number): string => {
-  const now = Date.now();
-  const behind = (passes: number): string => new Date(now - passes * gapMinutes * 60_000).toISOString();
-  return `${Array.from({ length: DISAGREEING_PASSES }, (_, index) => behind(DISAGREEING_PASSES - index)).join("\n")}\n`;
-};
-
-test("a pass run at a cadence that disagrees with the documented interval says so, once, and fails nothing", async () => {
-  // Acceptance criteria 1 and 5 through the real script (#265). The pass log
-  // holds a run of gaps at twice the documented interval, which is a host whose
-  // schedule moved and a repo that did not, so the line is printed and the pass
-  // still exits 0: a cadence nobody noticed is a thing to tell a maintainer
-  // about, never a reason to stop sweeping.
-  const wrong = HEARTBEAT_INTERVAL_MINUTES * 2;
-  const { stdout, status, passLog } = await passAgainstStub({ passLog: recentPasses(wrong) });
+test("a pass leaves nothing on the host's disk, so no state carries between passes", async () => {
+  // The sender is one stateless command (#328): every answer it gives comes
+  // from the targets it read this pass, and nothing it learns outlives the
+  // process. Asserted against a home directory of the pass's own, with no
+  // variable pointing anywhere else, because the state this repo did keep was
+  // a dotfile in whoever's home the host runs it as -- so a host that never
+  // configured anything is exactly the shape that would still be written to.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "heartbeat-home-"));
+  const { stdout, status } = await passAgainstStub({ home });
   assert.equal(status, 0, stdout);
-  assert.equal([...stdout.matchAll(/heartbeat CADENCE:/g)].length, 1, `one claim per pass, not one per target: ${stdout}`);
-  assert.match(stdout, literal(String(wrong)), "the line names the cadence observed");
-  assert.match(stdout, literal(INTERVAL_PHRASE), "the line names the interval documented");
-  // And the pass leaves itself behind, which is the only state this has: the
-  // run the next pass judges, and nothing older.
-  assert.equal(passLog.trimEnd().split("\n").length, DISAGREEING_PASSES, passLog);
-});
-
-test("a pass at the documented cadence prints no cadence line", async () => {
-  // Acceptance criterion 2 through the real script. Every pass printing one is
-  // how a maintainer learns to skip the pass that matters.
-  const { stdout, status } = await passAgainstStub({ passLog: recentPasses(HEARTBEAT_INTERVAL_MINUTES) });
-  assert.equal(status, 0, stdout);
-  assert.doesNotMatch(stdout, /CADENCE/);
-});
-
-test("a first pass claims nothing and still leaves its own timestamp behind", async () => {
-  // Acceptance criterion 4: a host onboarded a minute ago has no history, and a
-  // pass with nothing to compare against is not evidence of anything.
-  const { stdout, status, passLog } = await passAgainstStub({});
-  assert.equal(status, 0, stdout);
-  assert.doesNotMatch(stdout, /CADENCE/);
-  // One line, and a timestamp rather than whatever else: the next pass has a
-  // gap to measure only if this one left a stamp it can read back.
-  const stamps = passLog.trimEnd().split("\n");
-  assert.equal(stamps.length, 1, passLog);
-  assert.ok(!Number.isNaN(new Date(stamps[0]!).getTime()), `the pass recorded a timestamp: ${passLog}`);
-});
-
-test("a dry run records no pass, so reporting the shape of a pass cannot move the cadence", () => {
-  // A dry run reads no target and invents its answers, so counting it as a pass
-  // would leave a gap no host ever took in the one file the claim is made from.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "heartbeat-"));
-  const passLogFile = path.join(dir, "passes");
-  execFileSync(process.execPath, ["--experimental-strip-types", ENTRYPOINT], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: { DRY_RUN: "1", PATH: "", [PASS_LOG_ENV]: passLogFile },
-  });
-  assert.equal(fs.existsSync(passLogFile), false, "a dry run wrote a pass log");
-});
-
-test("a pass log that cannot be written costs the pass nothing", async () => {
-  // Acceptance criterion 5. The claim is worth less than the sweep, so a pass
-  // log the host cannot write is a line on stderr at most. That is the property
-  // the sender kept when it started holding state at all: no pass waits on
-  // another pass's file.
-  const { stdout, status } = await passAgainstStub({ unwritablePassLog: true });
-  assert.equal(status, 0, stdout);
-  assert.doesNotMatch(stdout, /CADENCE/);
-  assert.match(stdout, literal(`${TARGET_REPOS.length} target(s)`), "the pass still reported every target");
+  assert.deepEqual(fs.readdirSync(home), [], "the pass left state behind in the host's home directory");
 });
 
 test("a pass whose targets all succeed tells the dead-man's switch it exited 0", async () => {
