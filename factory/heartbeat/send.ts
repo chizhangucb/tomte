@@ -35,6 +35,7 @@ import { GhError, gh } from "../lib/gh.ts";
 import { READY_LABEL } from "../lib/labels.ts";
 import { cadenceLine, passLogPath, withPass } from "./cadence.ts";
 import { type TargetOutcome, sendHeartbeat } from "./heartbeat.ts";
+import { PING_URL_ENV, reportPass } from "./ping.ts";
 import { TARGET_REPOS } from "./targets.ts";
 import { PAUSE, WAIVER, isUnset, variableReadArgs, variablesReadableArgs } from "./variable.ts";
 import { type OpenSubject, fromGitHub, openWorkArgs } from "./work.ts";
@@ -185,7 +186,26 @@ console.log(
   // added, which is what a host's log history is full of.
   `${at()} ${outcomes.length} target(s), ${count("woken")} woken, ${count("skipped")} skipped, ${count("paused")} paused, ${failed} failed, ${count("nothing-due")} with nothing due${dryRun ? " (dry run)" : ""}.`,
 );
+const exitStatus = failed > 0 ? 1 : 0;
 // `exitCode`, not `process.exit`: stdout is a pipe when a host logs the pass,
 // pipe writes are asynchronous, and exiting in place can drop the lines that
 // say which target failed.
-if (failed > 0) process.exitCode = 1;
+process.exitCode = exitStatus;
+
+/**
+ * The dead-man's switch (#325), last, because it reports how the pass went:
+ * one request carrying the exit status, so a failed pass alerts at once and a
+ * pass that never happens alerts after the check's period and grace. Unset
+ * means the host has no switch and nothing is sent.
+ *
+ * Whatever it answers, the pass's exit status is already set above and is not
+ * touched here: watching the heartbeat may not be what stops it.
+ *
+ * A dry run tells the switch nothing, for the reason the waiver nag gives:
+ * it reads no target and invents its answers, so a maintainer trying the
+ * command would otherwise mark the real check up for a pass nothing swept.
+ */
+if (!dryRun) {
+  const failure = await reportPass(process.env[PING_URL_ENV], exitStatus);
+  if (failure) console.error(`${at()} ${failure}`);
+}
