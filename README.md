@@ -48,13 +48,13 @@ A target repo on GitHub, plus:
 
    **What any host needs.** Any provider will do — this is the whole contract, so you can run it wherever you already live:
 
-   - **The command**, once per interval: `GH_TOKEN=<token> FACTORY_HEARTBEAT_PING_URL=<url> node --experimental-strip-types factory/heartbeat/send.ts`.
+   - **The command**, once per interval: `GH_TOKEN=<token> node --experimental-strip-types factory/heartbeat/send.ts`.
    - **Node 22 or newer**, which is what strips the types with nothing installed, and `gh` on the host's `PATH`, which every read and every wake goes through.
    - **A checkout of `main`**, pulled before each pass, so a branch left behind in some clone never changes what sweeps your targets.
    - **The heartbeat's own fine-grained token**, never a target's `FACTORY_PAT`, scoped to: contents write, issues read, pull requests read and Actions variables read, on every target in `targets.ts` and nothing else.
    - **The interval**, every 30 minutes, which is the only number the host carries.
-   - **A healthchecks.io check, and its ping URL in `FACTORY_HEARTBEAT_PING_URL`.** The sender reports each pass's exit status to it, so a failed pass alerts at once and a dead host alerts once the check's period and grace run out; give the check a period of the interval and a grace of about ten minutes. Leave the variable unset and no ping is sent.
-   - **Not a GitHub cron**, which was measured firing about 5 percent of the time.
+   - **A healthchecks.io check, and its ping URL in the command's `FACTORY_HEARTBEAT_PING_URL`.** The sender reports each pass's exit status to it, so a failed pass alerts at once and a dead host alerts once the check's period and grace run out; give the check a period of the interval and a grace of about ten minutes. Leave the variable unset and no ping is sent.
+   - **Not a GitHub cron**, which was measured firing a small fraction of the times it should and was taken out of the caller for it (`docs/factory/dispatcher.md` has the measurement).
 
 Then label a ticket `ready-for-agent` and the pipeline above runs. To hold a ready ticket back, add `hold`. Labeling `agent:implement` by hand also works.
 

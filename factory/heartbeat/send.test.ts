@@ -240,8 +240,16 @@ const pingServer = async (answer: (respond: () => void) => void = (respond) => r
   return {
     url,
     paths,
-    /** Every connection destroyed, so a request the pass left hanging cannot keep this process alive. */
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())).finally(() => server.closeAllConnections()),
+    /**
+     * Connections destroyed first, then the server closed: `close` does not
+     * call back until every connection has ended, so a request the slow-switch
+     * test left hanging would hold the teardown open forever the other way
+     * round.
+     */
+    close: () => {
+      server.closeAllConnections();
+      return new Promise<void>((resolve) => server.close(() => resolve()));
+    },
   };
 };
 
@@ -611,7 +619,20 @@ test("a pass with a failed target tells the switch the status it failed with", a
   await withPingServer(async (server) => {
     const { stdout, status } = await passAgainstStub({ paused: "fail", pingUrl: server.url });
     assert.equal(status, 1, stdout);
-    assert.deepEqual(server.paths, [`/a-check-uuid/${status}`]);
+    assert.deepEqual(server.paths, ["/a-check-uuid/1"]);
+  });
+});
+
+test("a ping URL pasted with a trailing slash reaches the same check", async () => {
+  // healthchecks.io shows the ping URL with no slash and a browser adds one, so
+  // both shapes are pasted into a host's config, as is one with the newline a
+  // secrets file leaves on the end. `/a-check-uuid//0` is a different path, and
+  // the failure it produces is a check that never goes green with nothing in
+  // the host's log to say why.
+  await withPingServer(async (server) => {
+    const { stdout, status } = await passAgainstStub({ pingUrl: `${server.url}/\n` });
+    assert.equal(status, 0, stdout);
+    assert.deepEqual(server.paths, ["/a-check-uuid/0"]);
   });
 });
 
@@ -621,10 +642,14 @@ test("a host with no switch configured sends nothing, and its pass is otherwise 
   // here precisely so that a ping sent to some default would be recorded rather
   // than silently failing to connect.
   await withPingServer(async (server) => {
-    const { stdout, status } = await passAgainstStub({});
-    assert.equal(status, 0, stdout);
-    assert.deepEqual(server.paths, []);
-    assert.match(stdout, literal(`${TARGET_REPOS.length} target(s), 0 woken, ${TARGET_REPOS.length} skipped, 0 paused, 0 failed`));
+    // Unset, and a variable a host declared and left blank with it: neither is
+    // a request to whatever the empty string resolves against.
+    for (const pingUrl of ["", "   "]) {
+      const { stdout, status } = await passAgainstStub({ pingUrl });
+      assert.equal(status, 0, stdout);
+      assert.deepEqual(server.paths, []);
+      assert.match(stdout, literal(`${TARGET_REPOS.length} target(s), 0 woken, ${TARGET_REPOS.length} skipped, 0 paused, 0 failed`));
+    }
   });
 });
 
@@ -665,6 +690,23 @@ test("a switch nothing answers on costs the pass nothing but a line on stderr", 
   assert.match(stderr, literal(PING_URL_ENV));
 });
 
+/**
+ * How long a pass may wait on a switch and still be said to have cost it
+ * nothing. An absolute number and not a multiple of `PING_TIMEOUT_MS`: judged
+ * against the constant, a timeout raised to two minutes would move the bound
+ * with it and stay green, which is the one regression this is here to catch.
+ * Loose enough for a loaded machine, since what it rules out is a pass held
+ * open for a meaningful part of an interval rather than a slow second.
+ */
+const SHORT_ENOUGH_MS = 15_000;
+
+test("the timeout a slow switch is given is short against the interval", () => {
+  // The bound the test below measures against, asserted on the constant itself,
+  // so raising it past what a pass can afford fails here and says why rather
+  // than showing up as one slow test nobody reads.
+  assert.ok(PING_TIMEOUT_MS < SHORT_ENOUGH_MS, `a pass may wait ${PING_TIMEOUT_MS}ms on the switch`);
+});
+
 test("a switch that never answers gives up quickly and leaves the pass unchanged", async () => {
   // Acceptance criterion 5 (#325), the slow half, and the one that is not the
   // same failure: an unreachable port is refused at once, while a switch that
@@ -684,7 +726,7 @@ test("a switch that never answers gives up quickly and leaves the pass unchanged
       // The request arrived and was simply never answered, so this is the
       // timeout firing rather than a ping that was never sent.
       assert.deepEqual(server.paths, ["/a-check-uuid/0"]);
-      assert.ok(elapsed < PING_TIMEOUT_MS * 3, `the pass waited ${elapsed}ms on a switch that never answered`);
+      assert.ok(elapsed < SHORT_ENOUGH_MS, `the pass waited ${elapsed}ms on a switch that never answered`);
     },
     // Answered by nothing at all: the request is taken and the response never
     // written, which is the shape a hung server or a black-holed route takes.
@@ -697,18 +739,22 @@ const sentences = (text: string): string[] => text.split(/(?<=[.:])\s/);
 
 /**
  * What any host needs to run the heartbeat (#325), each as the smallest thing
- * README has to say for an adopter on a provider this repo writes no recipe
- * for to get the whole contract. The recipes name Render and a launchd or
- * systemd loop; this list is what is true whatever the host is, so an adopter
- * who already lives somewhere else is not left guessing at the parts a recipe
- * happened to carry.
+ * README has to say for an adopter to get the whole contract. This is the list
+ * that is true whatever the host is, which is what makes it the one a recipe
+ * for a named provider cannot replace: an adopter who already lives somewhere
+ * this repo writes no recipe for would otherwise be left to infer the parts a
+ * recipe happened to carry.
  *
  * Each is a phrase and not a heading, so README may say them in whatever order
  * its prose runs in; what the test owns is that none is missing.
  */
 const HOST_REQUIREMENTS: { needs: string; in: RegExp[] }[] = [
   { needs: "the command to run", in: [literal(ENTRYPOINT)] },
-  { needs: "the Node it runs on", in: [/\bnode\b/i, /--experimental-strip-types/] },
+  // A version and not just the word: `node` and `--experimental-strip-types`
+  // are both in the command line above, so a pattern taking those would go on
+  // passing with the one thing an adopter cannot guess -- which Node is new
+  // enough to strip types -- deleted from the page.
+  { needs: "which Node it runs on", in: [/\bnode\b/i, /\b\d+ or newer\b/i] },
   { needs: "`gh` on the host's PATH", in: [/\bgh\b/, /\bpath\b/i] },
   { needs: "a checkout of main, not whatever branch a clone was left on", in: [/\bcheckout\b/i, /\bmain\b/] },
   {

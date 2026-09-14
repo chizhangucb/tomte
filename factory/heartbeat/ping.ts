@@ -58,7 +58,7 @@ export const PING_TIMEOUT_MS = 5_000;
  * empty string is a host that has not filled it in, not one that wants a ping
  * to the sender's own working directory.
  */
-export const passUrl = (configured: string | undefined, exitStatus: number): string | undefined => {
+const passUrl = (configured: string | undefined, exitStatus: number): string | undefined => {
   const base = configured?.trim().replace(/\/+$/, "");
   return base ? `${base}/${exitStatus}` : undefined;
 };
@@ -71,7 +71,7 @@ export const passUrl = (configured: string | undefined, exitStatus: number): str
  * that will not parse as a URL is named by the variable alone, which is the
  * only true thing left to say about it.
  */
-const describe = (url: string): string => {
+const switchOrigin = (url: string): string => {
   try {
     return `${new URL(url).origin} (${PING_URL_ENV})`;
   } catch {
@@ -79,31 +79,33 @@ const describe = (url: string): string => {
   }
 };
 
+/** The one line a failed ping is worth, whichever way it failed. */
+const couldNotTell = (url: string, cause: string): string => `could not tell the dead-man's switch at ${switchOrigin(url)}: ${cause}`;
+
 /**
  * Tell the switch how the pass went, if the host configured one. Answers with
  * the line the caller should put on stderr, or nothing when there was nothing
  * to say: it never throws and never decides the pass's exit status, so the
  * caller has no failure of this to handle beyond printing it.
  *
- * `request` is the seam a test would take if it needed one; the sender's own
- * tests run the real command against a local server, so the default is the one
- * a host uses.
+ * No seam for the request and none for the clock: the sender's own tests run
+ * the real command against a local HTTP server, which is where the ticket put
+ * them, and a parameter no caller passes is one more thing to keep true than a
+ * host ever exercises.
  */
-export const reportPass = async (
-  configured: string | undefined,
-  exitStatus: number,
-  request: typeof fetch = fetch,
-): Promise<string | undefined> => {
+export const reportPass = async (configured: string | undefined, exitStatus: number): Promise<string | undefined> => {
   const url = passUrl(configured, exitStatus);
   if (!url) return undefined;
   try {
-    const response = await request(url, { method: "GET", signal: AbortSignal.timeout(PING_TIMEOUT_MS) });
+    const response = await fetch(url, { method: "GET", signal: AbortSignal.timeout(PING_TIMEOUT_MS) });
     // The body is read and dropped: healthchecks.io answers a two-byte "OK",
     // and a body left unread holds the socket open past the pass that opened it.
     await response.arrayBuffer();
-    if (!response.ok) return `could not tell the dead-man's switch at ${describe(url)}: HTTP ${response.status}`;
-    return undefined;
+    // A 404 is the commonest of these and the one worth reading: it is the
+    // check the URL names having been deleted, which is a switch nobody is
+    // watching rather than one that is merely unreachable.
+    return response.ok ? undefined : couldNotTell(url, `HTTP ${response.status}`);
   } catch (error) {
-    return `could not tell the dead-man's switch at ${describe(url)}: ${errorMessage(error)}`;
+    return couldNotTell(url, errorMessage(error));
   }
 };
