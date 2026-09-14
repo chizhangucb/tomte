@@ -14,8 +14,10 @@
  * imports it did not read.
  */
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
+import * as http from "node:http";
+import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
@@ -24,6 +26,7 @@ import { fileURLToPath } from "node:url";
 import { IMPLEMENT_LABEL } from "../lib/labels.ts";
 import { DISAGREEING_PASSES, PASS_LOG_ENV } from "./cadence.ts";
 import { HEARTBEAT_INTERVAL_MINUTES, INTERVAL_PHRASE } from "./interval.ts";
+import { PING_TIMEOUT_MS, PING_URL_ENV } from "./ping.ts";
 import { TARGET_REPOS } from "./targets.ts";
 import { PAUSE, WAIVER } from "./variable.ts";
 
@@ -135,13 +138,15 @@ test("the command a host runs completes a pass on bare node, with nothing instal
  * even when the target has none. Default true, since that is every target whose
  * token is scoped as README says.
  */
-const passAgainstStub = ({
+const passAgainstStub = async ({
   waived = "",
   paused = "",
   variablesReadable = true,
   passLog = "",
   unwritablePassLog = false,
   open = "",
+  pingUrl = "",
+  dryRun = false,
 }: {
   waived?: string;
   paused?: string;
@@ -152,7 +157,11 @@ const passAgainstStub = ({
   unwritablePassLog?: boolean;
   /** The open-work read's answer: projected items, one JSON line each. Empty is a target with nothing open. */
   open?: string;
-}): { stdout: string; stderr: string; status: number; passLog: string } => {
+  /** The dead-man's switch the pass reports to (#325). Empty is a host with none configured. */
+  pingUrl?: string;
+  /** Run the pass the way a maintainer trying the command does, which touches no target and pings nothing. */
+  dryRun?: boolean;
+}): Promise<{ stdout: string; stderr: string; status: number; passLog: string }> => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "heartbeat-"));
   const passLogFile = unwritablePassLog ? path.join(dir, "no-such-directory", "passes") : path.join(dir, "passes");
   if (passLog) fs.writeFileSync(passLogFile, passLog);
@@ -175,52 +184,106 @@ exit 0
 `,
     { mode: 0o755 },
   );
-  const result = spawnSync(process.execPath, ["--experimental-strip-types", ENTRYPOINT], {
-    cwd: fileURLToPath(repoRoot),
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      PATH: `${dir}:${process.env.PATH}`,
-      DRY_RUN: "",
-      [PASS_LOG_ENV]: passLogFile,
-      GH_WAIVED: waived,
-      GH_PAUSED: paused,
-      GH_OPEN: open,
-      // The count GitHub answers a list read with, which is "0" for a target
-      // that has no variables at all: an answer, and not the absence of one.
-      GH_VARS_LIST: variablesReadable ? "0" : "",
-    },
+  const result = await run({
+    ...process.env,
+    PATH: `${dir}:${process.env.PATH}`,
+    DRY_RUN: dryRun ? "1" : "",
+    [PASS_LOG_ENV]: passLogFile,
+    [PING_URL_ENV]: pingUrl,
+    GH_WAIVED: waived,
+    GH_PAUSED: paused,
+    GH_OPEN: open,
+    // The count GitHub answers a list read with, which is "0" for a target
+    // that has no variables at all: an answer, and not the absence of one.
+    GH_VARS_LIST: variablesReadable ? "0" : "",
   });
-  // A pass that never ran, or one a signal killed, has no status to read: say
-  // so here rather than asserting against a null stdout further down.
-  assert.ok(!result.error, `the pass ran: ${result.error?.message}`);
-  assert.equal(result.signal, null, "the pass was not killed");
+  return { ...result, passLog: fs.existsSync(passLogFile) ? fs.readFileSync(passLogFile, "utf8") : "" };
+};
+
+/**
+ * One run of the real command, awaited rather than blocking. `spawnSync` would
+ * hold this process's event loop for the whole pass, and the ping tests below
+ * serve the switch the pass reports to from this very process: a blocked loop
+ * never accepts that connection, so every one of them would read as an
+ * unreachable switch.
+ */
+const run = async (env: NodeJS.ProcessEnv): Promise<{ stdout: string; stderr: string; status: number }> => {
+  const child = spawn(process.execPath, ["--experimental-strip-types", ENTRYPOINT], { cwd: fileURLToPath(repoRoot), env });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+  child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+  const [code, signal] = await new Promise<[number | null, NodeJS.Signals | null]>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code, signal) => resolve([code, signal]));
+  });
+  // A pass a signal killed has no status to read: say so here rather than
+  // asserting against a null stdout further down.
+  assert.equal(signal, null, "the pass was not killed");
+  return { stdout, stderr, status: code ?? -1 };
+};
+
+/**
+ * A local HTTP server standing in for healthchecks.io: it records the path of
+ * every request the pass makes and answers each 200, so `paths` is exactly what
+ * the switch was told. `answer` is what the server does with a request, so a
+ * test can make the switch slow without making it unreachable.
+ */
+const pingServer = async (answer: (respond: () => void) => void = (respond) => respond()) => {
+  const paths: string[] = [];
+  const server = http.createServer((request, response) => {
+    paths.push(request.url!);
+    answer(() => response.writeHead(200).end("OK"));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/a-check-uuid`;
   return {
-    stdout: result.stdout,
-    stderr: result.stderr,
-    status: result.status ?? -1,
-    passLog: fs.existsSync(passLogFile) ? fs.readFileSync(passLogFile, "utf8") : "",
+    url,
+    paths,
+    /**
+     * Connections destroyed first, then the server closed: `close` does not
+     * call back until every connection has ended, so a request the slow-switch
+     * test left hanging would hold the teardown open forever the other way
+     * round.
+     */
+    close: () => {
+      server.closeAllConnections();
+      return new Promise<void>((resolve) => server.close(() => resolve()));
+    },
   };
 };
 
-test("a pass names an open waiver, with its reason and the target", () => {
-  const { stdout } = passAgainstStub({ waived: "PAT expired, see #244" });
+/** A switch with a server behind it, torn down whatever the assertions do. */
+const withPingServer = async <T>(
+  use: (server: Awaited<ReturnType<typeof pingServer>>) => Promise<T>,
+  answer?: (respond: () => void) => void,
+): Promise<T> => {
+  const server = await pingServer(answer);
+  try {
+    return await use(server);
+  } finally {
+    await server.close();
+  }
+};
+
+test("a pass names an open waiver, with its reason and the target", async () => {
+  const { stdout } = await passAgainstStub({ waived: "PAT expired, see #244" });
   for (const target of TARGET_REPOS) assert.match(stdout, literal(`${target} WAIVED: PAT expired, see #244`));
   assert.match(stdout, literal(WAIVER_VARIABLE));
 });
 
-test("a target with no waiver produces no such line", () => {
+test("a target with no waiver produces no such line", async () => {
   // The variable unset is a 404, which is not a failure and not a nag either.
-  const { stdout } = passAgainstStub({});
+  const { stdout } = await passAgainstStub({});
   assert.doesNotMatch(stdout, /WAIVED/);
   assert.match(stdout, literal(`${TARGET_REPOS.length} target(s), 0 woken, ${TARGET_REPOS.length} skipped, 0 paused, 0 failed`));
 });
 
-test("a paused target is skipped for the pause, and the pass says so rather than calling it idle", () => {
+test("a paused target is skipped for the pause, and the pass says so rather than calling it idle", async () => {
   // Acceptance criteria 1 and 2 through the real script: the stub fails any
   // call it does not recognise and knows no dispatch, so a pass that wakes a
   // paused target here exits non-zero rather than passing quietly.
-  const { stdout, status } = passAgainstStub({ paused: "runaway sweep, see #123" });
+  const { stdout, status } = await passAgainstStub({ paused: "runaway sweep, see #123" });
   assert.equal(status, 0, stdout);
   for (const target of TARGET_REPOS) assert.match(stdout, literal(`${target} skipped: paused (runaway sweep, see #123)`));
   assert.doesNotMatch(stdout, /dispatched to/);
@@ -231,14 +294,14 @@ test("a paused target is skipped for the pause, and the pass says so rather than
   assert.match(stdout, literal(PAUSE_VARIABLE));
 });
 
-test("a target with work open and nothing due is not woken, and the pass says that rather than calling it idle", () => {
+test("a target with work open and nothing due is not woken, and the pass says that rather than calling it idle", async () => {
   // #264, through the real script: the stub knows no dispatch, so a pass that
   // wakes this target exits non-zero rather than passing quietly. One ticket in
   // a factory state label, untouched for long enough that every deadline on it
   // has been and gone, which is the shape that woke a target every pass.
   const settled = new Date(Date.now() - 90 * 60_000).toISOString();
   const item = JSON.stringify({ number: 7, title: "a ticket", pull_request: false, labels: [{ name: IMPLEMENT_LABEL }], updated_at: settled });
-  const { stdout, status } = passAgainstStub({ open: `${item}\n` });
+  const { stdout, status } = await passAgainstStub({ open: `${item}\n` });
   assert.equal(status, 0, stdout);
   for (const target of TARGET_REPOS) assert.match(stdout, literal(`${target} not woken: work open, nothing due`));
   assert.doesNotMatch(stdout, /dispatched to/);
@@ -247,7 +310,7 @@ test("a target with work open and nothing due is not woken, and the pass says th
   assert.match(stdout, literal(`${TARGET_REPOS.length} target(s), 0 woken, 0 skipped, 0 paused, 0 failed, ${TARGET_REPOS.length} with nothing due`));
 });
 
-test("a token that cannot read a target's variables fails it, rather than reading every pause as unset", () => {
+test("a token that cannot read a target's variables fails it, rather than reading every pause as unset", async () => {
   // Acceptance criterion 6 again, against the way the failure actually
   // arrives. A fine-grained PAT holding the repo but not Actions variables
   // read answers this endpoint 404, the same 404 as a variable that is simply
@@ -256,27 +319,27 @@ test("a token that cannot read a target's variables fails it, rather than readin
   // pause, woken every interval with the pass reporting it woken. The list
   // endpoint is what tells them apart: a token that may read variables answers
   // it 200 even when the target has none.
-  const { stdout, stderr, status } = passAgainstStub({ paused: "", variablesReadable: false });
+  const { stdout, stderr, status } = await passAgainstStub({ paused: "", variablesReadable: false });
   assert.equal(status, 1, stdout);
   for (const target of TARGET_REPOS) assert.match(stderr, literal(`factory-sweep FAILED for ${target}`));
   assert.doesNotMatch(stdout, /dispatched to/);
   assert.match(stdout, literal(`0 woken, 0 skipped, 0 paused, ${TARGET_REPOS.length} failed`));
 });
 
-test("a target that is really paused is never asked whether its variables are readable", () => {
+test("a target that is really paused is never asked whether its variables are readable", async () => {
   // The list read is the 404's second question and nothing more. A pause that
   // answered with a value has already settled it, so making the call anyway
   // would spend a request per target per pass to re-confirm what the answer
   // just proved.
-  const { stdout, status } = passAgainstStub({ paused: "incident", variablesReadable: false });
+  const { stdout, status } = await passAgainstStub({ paused: "incident", variablesReadable: false });
   assert.equal(status, 0, stdout);
   for (const target of TARGET_REPOS) assert.match(stdout, literal(`${target} skipped: paused (incident)`));
 });
 
-test("a pause that cannot be read fails its target rather than being taken for running", () => {
+test("a pause that cannot be read fails its target rather than being taken for running", async () => {
   // Acceptance criterion 6. The failure is a non-zero exit, which is what the
   // host's alerting sees, and the line names the target and the variable.
-  const { stdout, stderr, status } = passAgainstStub({ paused: "fail" });
+  const { stdout, stderr, status } = await passAgainstStub({ paused: "fail" });
   assert.equal(status, 1, stdout);
   for (const target of TARGET_REPOS) assert.match(stderr, literal(`factory-sweep FAILED for ${target}`));
   assert.doesNotMatch(stdout, /dispatched to/);
@@ -471,14 +534,14 @@ const recentPasses = (gapMinutes: number): string => {
   return `${Array.from({ length: DISAGREEING_PASSES }, (_, index) => behind(DISAGREEING_PASSES - index)).join("\n")}\n`;
 };
 
-test("a pass run at a cadence that disagrees with the documented interval says so, once, and fails nothing", () => {
+test("a pass run at a cadence that disagrees with the documented interval says so, once, and fails nothing", async () => {
   // Acceptance criteria 1 and 5 through the real script (#265). The pass log
   // holds a run of gaps at twice the documented interval, which is a host whose
   // schedule moved and a repo that did not, so the line is printed and the pass
   // still exits 0: a cadence nobody noticed is a thing to tell a maintainer
   // about, never a reason to stop sweeping.
   const wrong = HEARTBEAT_INTERVAL_MINUTES * 2;
-  const { stdout, status, passLog } = passAgainstStub({ passLog: recentPasses(wrong) });
+  const { stdout, status, passLog } = await passAgainstStub({ passLog: recentPasses(wrong) });
   assert.equal(status, 0, stdout);
   assert.equal([...stdout.matchAll(/heartbeat CADENCE:/g)].length, 1, `one claim per pass, not one per target: ${stdout}`);
   assert.match(stdout, literal(String(wrong)), "the line names the cadence observed");
@@ -488,18 +551,18 @@ test("a pass run at a cadence that disagrees with the documented interval says s
   assert.equal(passLog.trimEnd().split("\n").length, DISAGREEING_PASSES, passLog);
 });
 
-test("a pass at the documented cadence prints no cadence line", () => {
+test("a pass at the documented cadence prints no cadence line", async () => {
   // Acceptance criterion 2 through the real script. Every pass printing one is
   // how a maintainer learns to skip the pass that matters.
-  const { stdout, status } = passAgainstStub({ passLog: recentPasses(HEARTBEAT_INTERVAL_MINUTES) });
+  const { stdout, status } = await passAgainstStub({ passLog: recentPasses(HEARTBEAT_INTERVAL_MINUTES) });
   assert.equal(status, 0, stdout);
   assert.doesNotMatch(stdout, /CADENCE/);
 });
 
-test("a first pass claims nothing and still leaves its own timestamp behind", () => {
+test("a first pass claims nothing and still leaves its own timestamp behind", async () => {
   // Acceptance criterion 4: a host onboarded a minute ago has no history, and a
   // pass with nothing to compare against is not evidence of anything.
-  const { stdout, status, passLog } = passAgainstStub({});
+  const { stdout, status, passLog } = await passAgainstStub({});
   assert.equal(status, 0, stdout);
   assert.doesNotMatch(stdout, /CADENCE/);
   // One line, and a timestamp rather than whatever else: the next pass has a
@@ -522,13 +585,206 @@ test("a dry run records no pass, so reporting the shape of a pass cannot move th
   assert.equal(fs.existsSync(passLogFile), false, "a dry run wrote a pass log");
 });
 
-test("a pass log that cannot be written costs the pass nothing", () => {
+test("a pass log that cannot be written costs the pass nothing", async () => {
   // Acceptance criterion 5. The claim is worth less than the sweep, so a pass
   // log the host cannot write is a line on stderr at most. That is the property
   // the sender kept when it started holding state at all: no pass waits on
   // another pass's file.
-  const { stdout, status } = passAgainstStub({ unwritablePassLog: true });
+  const { stdout, status } = await passAgainstStub({ unwritablePassLog: true });
   assert.equal(status, 0, stdout);
   assert.doesNotMatch(stdout, /CADENCE/);
   assert.match(stdout, literal(`${TARGET_REPOS.length} target(s)`), "the pass still reported every target");
+});
+
+test("a pass whose targets all succeed tells the dead-man's switch it exited 0", async () => {
+  // Acceptance criterion 1 (#325), through the real command against a local
+  // server standing in for healthchecks.io. One request, to the configured URL
+  // with the pass's exit status on the end, which is how healthchecks.io is
+  // told a run succeeded. One and not one per target: the switch watches the
+  // pass, and a check that took a request per target would read a shrinking
+  // target list as a host going quiet.
+  await withPingServer(async (server) => {
+    const { stdout, status } = await passAgainstStub({ pingUrl: server.url });
+    assert.equal(status, 0, stdout);
+    assert.deepEqual(server.paths, ["/a-check-uuid/0"]);
+  });
+});
+
+test("a pass with a failed target tells the switch the status it failed with", async () => {
+  // Acceptance criterion 2 (#325): the exit status and not a bare "alive", so a
+  // failed pass alerts at once instead of waiting out the check's grace for a
+  // pass that does arrive. An unreadable pause is the failure this reaches for
+  // because it is the one a host really sees, a token whose Actions variables
+  // read lapsed.
+  await withPingServer(async (server) => {
+    const { stdout, status } = await passAgainstStub({ paused: "fail", pingUrl: server.url });
+    assert.equal(status, 1, stdout);
+    assert.deepEqual(server.paths, ["/a-check-uuid/1"]);
+  });
+});
+
+test("a ping URL pasted with a trailing slash reaches the same check", async () => {
+  // healthchecks.io shows the ping URL with no slash and a browser adds one, so
+  // both shapes are pasted into a host's config, as is one with the newline a
+  // secrets file leaves on the end. `/a-check-uuid//0` is a different path, and
+  // the failure it produces is a check that never goes green with nothing in
+  // the host's log to say why.
+  await withPingServer(async (server) => {
+    const { stdout, status } = await passAgainstStub({ pingUrl: `${server.url}/\n` });
+    assert.equal(status, 0, stdout);
+    assert.deepEqual(server.paths, ["/a-check-uuid/0"]);
+  });
+});
+
+test("a host with no switch configured sends nothing, and its pass is otherwise unchanged", async () => {
+  // Acceptance criterion 3 (#325). Unset is every host until somebody makes a
+  // check, so the sender may not require one: the server is up and listening
+  // here precisely so that a ping sent to some default would be recorded rather
+  // than silently failing to connect.
+  await withPingServer(async (server) => {
+    // Unset, and a variable a host declared and left blank with it: neither is
+    // a request to whatever the empty string resolves against.
+    for (const pingUrl of ["", "   "]) {
+      const { stdout, status } = await passAgainstStub({ pingUrl });
+      assert.equal(status, 0, stdout);
+      assert.deepEqual(server.paths, []);
+      assert.match(stdout, literal(`${TARGET_REPOS.length} target(s), 0 woken, ${TARGET_REPOS.length} skipped, 0 paused, 0 failed`));
+    }
+  });
+});
+
+test("a dry run tells the switch nothing, so trying the command never marks the check up", async () => {
+  // Acceptance criterion 4 (#325). A dry run reads no target and invents its
+  // answers, so a maintainer trying the command out would otherwise report a
+  // green pass for a sweep that never happened, and a host that had actually
+  // died would look alive for as long as somebody kept trying it.
+  await withPingServer(async (server) => {
+    const { stdout, status } = await passAgainstStub({ dryRun: true, pingUrl: server.url });
+    assert.equal(status, 0, stdout);
+    assert.deepEqual(server.paths, []);
+    assert.match(stdout, literal("(dry run)"));
+  });
+});
+
+/** A pass's lines with the timestamp off the front of each, so two passes can be compared. */
+const outcomeLines = (stdout: string): string[] => stdout.split("\n").filter(Boolean).map((line) => line.replace(/^\S+ /, ""));
+
+/** A URL nothing answers on: a server bound to a free port and then shut, so the port is known and closed. */
+const unreachableUrl = async (): Promise<string> => {
+  const server = await pingServer();
+  await server.close();
+  return server.url;
+};
+
+test("a switch nothing answers on costs the pass nothing but a line on stderr", async () => {
+  // Acceptance criterion 5 (#325), the unreachable half. Watching the heartbeat
+  // may not be what stops it: a monitoring outage, a mistyped URL or a
+  // healthchecks.io incident leaves the pass exactly as it was without a switch
+  // configured at all, which is what the comparison below pins.
+  const without = await passAgainstStub({});
+  const { stdout, stderr, status } = await passAgainstStub({ pingUrl: await unreachableUrl() });
+  assert.equal(status, without.status, stderr);
+  assert.deepEqual(outcomeLines(stdout), outcomeLines(without.stdout));
+  // Said out loud, and naming the variable to look in, since nothing else will
+  // ever mention a switch that is not being reached.
+  assert.match(stderr, literal(PING_URL_ENV));
+  // And saying which failure it was. `fetch` renders every transport failure as
+  // the same "fetch failed" and hangs the reason off `cause`, so a line that
+  // stops there tells an operator nothing a refused port, an unknown host and a
+  // bad certificate do not all say.
+  assert.match(stderr, /fetch failed: \S/, `the line does not say why the switch could not be reached: ${stderr}`);
+});
+
+/**
+ * How long a pass may wait on a switch and still be said to have cost it
+ * nothing. An absolute number and not a multiple of `PING_TIMEOUT_MS`: judged
+ * against the constant, a timeout raised to two minutes would move the bound
+ * with it and stay green, which is the one regression this is here to catch.
+ * Loose enough for a loaded machine, since what it rules out is a pass held
+ * open for a meaningful part of an interval rather than a slow second.
+ */
+const SHORT_ENOUGH_MS = 15_000;
+
+test("the timeout a slow switch is given is short against the interval", () => {
+  // The bound the test below measures against, asserted on the constant itself,
+  // so raising it past what a pass can afford fails here and says why rather
+  // than showing up as one slow test nobody reads.
+  assert.ok(PING_TIMEOUT_MS < SHORT_ENOUGH_MS, `a pass may wait ${PING_TIMEOUT_MS}ms on the switch`);
+});
+
+test("a switch that never answers gives up quickly and leaves the pass unchanged", async () => {
+  // Acceptance criterion 5 (#325), the slow half, and the one that is not the
+  // same failure: an unreachable port is refused at once, while a switch that
+  // accepts the connection and then says nothing would hold the pass open
+  // forever. On a host that runs one pass at a time that is the next pass lost
+  // too, so the timeout is what keeps a slow switch from becoming a dead
+  // heartbeat.
+  const without = await passAgainstStub({});
+  await withPingServer(
+    async (server) => {
+      const startedAt = Date.now();
+      const { stdout, stderr, status } = await passAgainstStub({ pingUrl: server.url });
+      const elapsed = Date.now() - startedAt;
+      assert.equal(status, without.status, stderr);
+      assert.deepEqual(outcomeLines(stdout), outcomeLines(without.stdout));
+      assert.match(stderr, literal(PING_URL_ENV));
+      // The request arrived and was simply never answered, so this is the
+      // timeout firing rather than a ping that was never sent.
+      assert.deepEqual(server.paths, ["/a-check-uuid/0"]);
+      assert.ok(elapsed < SHORT_ENOUGH_MS, `the pass waited ${elapsed}ms on a switch that never answered`);
+    },
+    // Answered by nothing at all: the request is taken and the response never
+    // written, which is the shape a hung server or a black-holed route takes.
+    () => {},
+  );
+});
+
+/** One sentence of a page, so a requirement is pinned as a line an adopter reads rather than as words scattered over a file. */
+const sentences = (text: string): string[] => text.split(/(?<=[.:])\s/);
+
+/**
+ * What any host needs to run the heartbeat (#325), each as the smallest thing
+ * README has to say for an adopter to get the whole contract. This is the list
+ * that is true whatever the host is, which is what makes it the one a recipe
+ * for a named provider cannot replace: an adopter who already lives somewhere
+ * this repo writes no recipe for would otherwise be left to infer the parts a
+ * recipe happened to carry.
+ *
+ * Each is a phrase and not a heading, so README may say them in whatever order
+ * its prose runs in; what the test owns is that none is missing.
+ */
+const HOST_REQUIREMENTS: { needs: string; in: RegExp[] }[] = [
+  { needs: "the command to run", in: [literal(ENTRYPOINT)] },
+  // A version and not just the word: `node` and `--experimental-strip-types`
+  // are both in the command line above, so a pattern taking those would go on
+  // passing with the one thing an adopter cannot guess -- which Node is new
+  // enough to strip types -- deleted from the page.
+  { needs: "which Node it runs on", in: [/\bnode\b/i, /\b\d+ or newer\b/i] },
+  { needs: "`gh` on the host's PATH", in: [/\bgh\b/, /\bpath\b/i] },
+  { needs: "a checkout of main, not whatever branch a clone was left on", in: [/\bcheckout\b/i, /\bmain\b/] },
+  {
+    needs: "the token's scopes, on every target and nothing else",
+    in: [/contents write/i, /issues[ ,]/i, /pull requests/i, /variables read/i, /nothing else/i],
+  },
+  { needs: "how often to run it", in: [literal(INTERVAL_PHRASE)] },
+  { needs: "the switch to report to, and the check behind it", in: [literal(PING_URL_ENV), /healthchecks\.io/i] },
+  { needs: "the check's period, which is the interval plus a grace", in: [/\bperiod\b/i, /\bgrace\b/i] },
+];
+
+test("README says what any host needs, so an adopter on any provider has the whole contract", () => {
+  // Acceptance criterion 8 (#325). Before this, README's whole answer was "a
+  // host that runs the heartbeat", and every other part of the contract -- the
+  // token's scopes, the checkout, the switch -- lived in a comment in the
+  // sender or in nobody's head. Each requirement is asserted in one sentence,
+  // because a reader who finds the command on one page and the token four
+  // screens down has not been told what a host needs, they have been told to
+  // go and assemble it.
+  const text = fs.readFileSync(new URL("README.md", repoRoot), "utf8");
+  const said = sentences(text);
+  for (const requirement of HOST_REQUIREMENTS) {
+    assert.ok(
+      said.some((sentence) => requirement.in.every((part) => part.test(sentence))),
+      `README does not say, in one sentence, ${requirement.needs}`,
+    );
+  }
 });

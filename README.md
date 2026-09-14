@@ -28,7 +28,7 @@ A target repo on GitHub, plus:
 
 - **A coding-agent account** — today a Claude subscription (`claude setup-token`, any of Pro, Max, Team, or Enterprise); the auth seam is built to take an API key or another vendor too (ADR 0001).
 - **A fine-grained PAT scoped to that one target** — contents, issues, pull requests, and workflows write.
-- **A host that runs the heartbeat every 30 minutes** — anything but a GitHub cron (it does not fire reliably).
+- **A host that runs the heartbeat every 30 minutes** — any always-on machine or cloud scheduler but a GitHub cron (it does not fire reliably), holding the heartbeat's own token and watched by a healthchecks.io check; step 5 below is the whole list of what a host needs.
 
 ## Onboard a target repo
 
@@ -44,7 +44,17 @@ A target repo on GitHub, plus:
 
 4. **Let this repo serve its workflows.** Settings → Actions → General → Access. A private factory repo will not serve them otherwise.
 
-5. **Add the target to the heartbeat.** One line in `factory/heartbeat/targets.ts`, then run `GH_TOKEN=<token> node --experimental-strip-types factory/heartbeat/send.ts` every 30 minutes from your host (not a GitHub cron). One sender covers any number of targets and only wakes a target with work due.
+5. **Add the target to the heartbeat.** One line in `factory/heartbeat/targets.ts`, then run the sender every 30 minutes from a host of your own. One sender covers any number of targets and only wakes a target with work due.
+
+   **What any host needs.** Any provider will do — this is the whole contract, so you can run it wherever you already live:
+
+   - **The command**, once per interval: `GH_TOKEN=<token> node --experimental-strip-types factory/heartbeat/send.ts`.
+   - **Node 22 or newer**, which is what strips the types with nothing installed, and `gh` on the host's `PATH`, which every read and every wake goes through.
+   - **A checkout of `main`**, pulled before each pass, so a branch left behind in some clone never changes what sweeps your targets.
+   - **The heartbeat's own fine-grained token**, never a target's `FACTORY_PAT`, scoped to: contents write, issues read, pull requests read and Actions variables read, on every target in `targets.ts` and nothing else.
+   - **The interval**, every 30 minutes, which is the only number the host carries.
+   - **A healthchecks.io check, and its ping URL in `FACTORY_HEARTBEAT_PING_URL`**, set in the command's environment beside `GH_TOKEN`. The sender reports each pass's exit status to it, so a failed pass alerts at once and a dead host alerts once the check's period and grace run out; give the check a period of the interval and a grace of about ten minutes. Leave the variable unset and no ping is sent.
+   - **Not a GitHub cron**, which was measured firing a small fraction of the times it should and was taken out of the caller for it (`docs/factory/dispatcher.md` has the measurement).
 
 Then label a ticket `ready-for-agent` and the pipeline above runs. To hold a ready ticket back, add `hold`. Labeling `agent:implement` by hand also works.
 
