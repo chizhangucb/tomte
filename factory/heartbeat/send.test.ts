@@ -505,6 +505,14 @@ test("no other page or module restates the interval, so there is one copy to kee
   // stopped reaching it, by a rename or by prose that stopped naming the
   // heartbeat, would go on passing while that number sat there.
   assert.ok(scanned.includes(LOOP_RUNNER), `the scan no longer reaches ${LOOP_RUNNER}, which sleeps the interval`);
+  // And the one shape the prose scan above cannot see: a script restates the
+  // interval by sleeping it, `sleep 1800`, not by saying it in a sentence. The
+  // loop runner is the only file that does anything with the number rather
+  // than describe it, so both the minutes and the seconds are refused there.
+  const loopRunner = fs.readFileSync(new URL(LOOP_RUNNER, repoRoot), "utf8");
+  for (const number of [HEARTBEAT_INTERVAL_MINUTES, HEARTBEAT_INTERVAL_MINUTES * 60]) {
+    assert.doesNotMatch(loopRunner, new RegExp(`\\b${number}\\b`), `${LOOP_RUNNER} writes ${number} instead of reading the interval`);
+  }
   assert.deepEqual(restating, [], `these state the heartbeat's cadence instead of naming the interval: ${restating.join(", ")}`);
 });
 

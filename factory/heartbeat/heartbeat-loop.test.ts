@@ -35,8 +35,11 @@ const INTERVAL_SECONDS = String(HEARTBEAT_INTERVAL_MINUTES * 60);
  * shared log. `GIT_FAILS` makes the pull fail the way an unreachable remote
  * does, which is the failure the loop has to survive.
  */
+const RECORD = String.raw`record() { printf '%s\t' "$@" >> "$CALLS"; printf '\n' >> "$CALLS"; }`;
+
 const stubGit = `#!/usr/bin/env bash
-printf '%s\\t' git "$@" >> "$CALLS"; printf '\\n' >> "$CALLS"
+${RECORD}
+record git "$@"
 if [ -n "\${GIT_FAILS:-}" ]; then echo "$GIT_FAILS" >&2; exit 1; fi
 exit 0
 `;
@@ -50,16 +53,20 @@ exit 0
  * real `node` at all.
  */
 const stubNode = `#!/usr/bin/env bash
+${RECORD}
 case "$*" in
   *send.ts*)
-    printf '%s\\t' node "$@" >> "$CALLS"; printf '\\n' >> "$CALLS"
+    record node "$@"
     printf '%s\\t%s\\n' "\${GH_TOKEN-}" "\${${PING_URL_ENV}-}" >> "$PASS_ENV"
     passes=$(wc -l < "$PASS_ENV")
     if [ "$passes" -le "\${PASS_FAILS:-0}" ]; then echo "stub pass failed" >&2; exit 1; fi ;;
   *)
-    printf '%s\\t' read-interval >> "$CALLS"; printf '\\n' >> "$CALLS"
+    record read-interval
     if [ -n "\${INTERVAL_READ_FAILS:-}" ] && [ "$(grep -c '^read-interval' "$CALLS")" -gt "\${INTERVAL_READS_OK:-0}" ]; then
       echo "$INTERVAL_READ_FAILS" >&2; exit 1
+    fi
+    if [ -n "\${INTERVAL_READ_JUNK:-}" ] && [ "$(grep -c '^read-interval' "$CALLS")" -gt "\${INTERVAL_READS_OK:-0}" ]; then
+      printf '%s' "$INTERVAL_READ_JUNK"; exit 0
     fi
     exec "$REAL_NODE" "$@" ;;
 esac
@@ -73,7 +80,8 @@ exit 0
  * A bound the script knew about would be a bound the real host runs with too.
  */
 const stubSleep = `#!/usr/bin/env bash
-printf '%s\\t' sleep "$@" >> "$CALLS"; printf '\\n' >> "$CALLS"
+${RECORD}
+record sleep "$@"
 if [ "$(grep -c '^sleep' "$CALLS")" -ge "$MAX_SLEEPS" ]; then kill "$PPID"; fi
 exit 0
 `;
@@ -89,12 +97,14 @@ type Options = {
   intervalReadFails?: string;
   /** How many interval reads answer before `intervalReadFails` starts failing them. */
   intervalReadsOk?: number;
+  /** When set, the interval read exits 0 having printed this instead of a number of seconds. */
+  intervalReadJunk?: string;
   /** The token and ping URL the host has in the loop's environment. */
   env?: Record<string, string>;
 };
 
 const run = (options: Options = {}) => {
-  const { passes = 2, gitFails, passFails = 0, intervalReadFails, intervalReadsOk = 0, env = {} } = options;
+  const { passes = 2, gitFails, passFails = 0, intervalReadFails, intervalReadsOk = 0, intervalReadJunk, env = {} } = options;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "heartbeat-loop-"));
   for (const [name, source] of [
     ["git", stubGit],
@@ -110,6 +120,11 @@ const run = (options: Options = {}) => {
   const result = spawnSync("bash", [script], {
     encoding: "utf8",
     timeout: 60_000,
+    // Anywhere but the clone. A keep-alive starts the loop from the root
+    // directory or from the maintainer's home, never from the checkout, so a
+    // script that read `./factory/...` out of whatever directory it inherited
+    // would work in this test and nowhere a host runs it.
+    cwd: dir,
     env: {
       ...process.env,
       ...env,
@@ -122,6 +137,7 @@ const run = (options: Options = {}) => {
       PASS_FAILS: String(passFails),
       INTERVAL_READ_FAILS: intervalReadFails ?? "",
       INTERVAL_READS_OK: String(intervalReadsOk),
+      INTERVAL_READ_JUNK: intervalReadJunk ?? "",
     },
   });
   const calls: string[][] = fs
@@ -131,7 +147,6 @@ const run = (options: Options = {}) => {
     .map((line) => line.split("\t").slice(0, -1));
   return {
     status: result.status,
-    stdout: result.stdout,
     stderr: result.stderr,
     /** Every call the script made, in order, argv and all. */
     calls,
@@ -146,6 +161,9 @@ const run = (options: Options = {}) => {
   };
 };
 
+/** The calls one whole pass makes, in the order the loop makes them. */
+const PASS = ["git", "read-interval", "node", "sleep"];
+
 test("a pass is a pull, then the sender, then a sleep of the repo's interval, over and over", () => {
   // Acceptance criteria 1 and 2, and the whole shape of the thing: the loop
   // takes no arguments, and what it does is the same three calls forever.
@@ -153,7 +171,7 @@ test("a pass is a pull, then the sender, then a sleep of the repo's interval, ov
   // before every pass" is a claim about order and a tally cannot tell it from
   // a script that pulled twice and then passed twice.
   const { shape, calls } = run({ passes: 3 });
-  assert.deepEqual(shape, ["git", "read-interval", "node", "sleep", "git", "read-interval", "node", "sleep", "git", "read-interval", "node", "sleep"]);
+  assert.deepEqual(shape, [...PASS, ...PASS, ...PASS]);
   // The pull is fast-forward only and names `main`: a loop that could merge
   // would run whatever the merge produced, and one that pulled a branch would
   // be the working checkout this recipe exists to replace.
@@ -171,9 +189,6 @@ test("a pass is a pull, then the sender, then a sleep of the repo's interval, ov
     assert.deepEqual(call, ["sleep", INTERVAL_SECONDS]);
   }
 });
-
-/** The three calls one whole pass makes, in the order the loop makes them. */
-const PASS = ["git", "read-interval", "node", "sleep"];
 
 test("a pass that fails is said out loud and the next pass runs anyway", () => {
   // Acceptance criterion 3, the half that matters most: a target unreadable
@@ -294,4 +309,22 @@ test("the keep-alive examples carry no interval, because the host is not what sc
       assert.doesNotMatch(example, literal(number), `the ${scheduler} example does not restate the interval`);
     }
   }
+});
+
+test("a read that answers anything but a number of seconds is a failed read, not something to sleep", () => {
+  // A `node` that exits 0 having printed a warning, a stray line, or nothing
+  // at all is the failure that reads as a success. Passing what it said
+  // straight to `sleep` makes every sleep fail instantly, and a loop that
+  // never sleeps runs passes back to back on every target it covers, which is
+  // the one failure here that costs money rather than coverage.
+  const { shape, calls } = run({ passes: 2, intervalReadJunk: "(node:1) ExperimentalWarning: stripping types\n", intervalReadsOk: 1 });
+  assert.deepEqual(shape, [...PASS, ...PASS]);
+  assert.deepEqual(
+    calls.filter(([command]) => command === "sleep"),
+    [
+      ["sleep", INTERVAL_SECONDS],
+      ["sleep", INTERVAL_SECONDS],
+    ],
+    "the junk is refused and the interval the first pass read is slept instead",
+  );
 });

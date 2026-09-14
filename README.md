@@ -59,7 +59,7 @@ A target repo on GitHub, plus:
    **On your own always-on machine.** One script, kept alive, and the machine carries no interval at all:
 
    ```
-   git clone https://github.com/<you>/tomte.git ~/tomte-heartbeat   # a clone of its own, left on main
+   git clone https://github.com/chizhangucb/tomte.git ~/tomte-heartbeat   # a clone of its own, left on main
    GH_TOKEN=<token> FACTORY_HEARTBEAT_PING_URL=<ping url> ~/tomte-heartbeat/scripts/heartbeat-loop.sh
    ```
 
@@ -82,8 +82,8 @@ A target repo on GitHub, plus:
      </dict>
      <key>KeepAlive</key><true/>
      <key>RunAtLoad</key><true/>
-     <key>StandardOutPath</key><string>/Users/you/tomte-heartbeat/loop.log</string>
-     <key>StandardErrorPath</key><string>/Users/you/tomte-heartbeat/loop.log</string>
+     <key>StandardOutPath</key><string>/Users/you/Library/Logs/tomte-heartbeat.log</string>
+     <key>StandardErrorPath</key><string>/Users/you/Library/Logs/tomte-heartbeat.log</string>
    </dict></plist>
    ```
 
@@ -103,7 +103,7 @@ A target repo on GitHub, plus:
    WantedBy=default.target
    ```
 
-   Neither says how often to run anything, and neither is a timer: the repo's constant is the only copy of that number, and restarting the loop is the whole of what the host owes it.
+   Neither says how often to run anything, and neither is a timer: the repo's constant is the only copy of that number, and restarting the loop is the whole of what the host owes it. Both hand the loop the keep-alive's own `PATH`, which is a short one — if `node` or `git` came from nvm, Homebrew or anywhere else, name them in the example's environment too, or the loop stops on its first pass saying it could not read the interval. Keep the log outside the clone, as both examples do: the loop pulls into that clone, and a log written inside it is a file `--ff-only` will trip over.
 
 Then label a ticket `ready-for-agent` and the pipeline above runs. To hold a ready ticket back, add `hold`. Labeling `agent:implement` by hand also works.
 
