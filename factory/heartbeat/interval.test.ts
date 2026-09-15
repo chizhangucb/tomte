@@ -7,6 +7,7 @@
  * `stuckMinutes` would agree with itself forever while the reconciler moved.
  */
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
 import { test } from "node:test";
 
 import { DEFAULT_DEADLINES } from "../dispatch/reconcile.ts";
@@ -72,4 +73,38 @@ test("the interval is a whole number of minutes, which is what a scheduler takes
   // `StartInterval` is seconds and a cron is minutes; neither takes a fraction.
   assert.ok(Number.isInteger(HEARTBEAT_INTERVAL_MINUTES), `${HEARTBEAT_INTERVAL_MINUTES} is not a whole number of minutes`);
   assert.ok(HEARTBEAT_INTERVAL_MINUTES > 0, "an interval of zero or less is not a schedule");
+});
+
+/**
+ * The header of `interval.ts` as prose: the first block comment, markers and
+ * line breaks gone, so a phrase is read the way it is written and not missed
+ * because it wrapped. `send.test.ts` reads the pages it scans the same way.
+ */
+const header = (): string => {
+  const source = fs.readFileSync(new URL("./interval.ts", import.meta.url), "utf8");
+  const block = /^\/\*\*([\s\S]*?)\*\//.exec(source);
+  assert.ok(block, "interval.ts opens with a block comment, which is the header this reads");
+  return block[1]!.replace(/^\s*\*\s?/gm, " ").replace(/\s+/g, " ");
+};
+
+/**
+ * The launchd job the header used to name, retired by #111 with the heartbeat
+ * moved onto a **Host**. Kept as the positive control for the refusals below:
+ * a scan is only evidence that the sentence is gone if the patterns are known
+ * to match it.
+ */
+const RETIRED = "host schedules it with, a launchd job on the maintainer's machine today (#111 is where that lives for good)";
+
+/** Every way the header named one host's own wiring, which is what CONTEXT.md's **Host** entry says to avoid. */
+const NAMES_A_PROVIDER = [/launchd/i, /maintainer'?s machine/i, /#111\b/];
+
+test("the header names no provider and no machine of anyone's, because the factory does not own the host", () => {
+  // The header was written when one launchd job on one machine was the whole
+  // truth about where the heartbeat ran. #111 retired that job, and README's
+  // "what any host needs" is the contract now: the choice of provider is an
+  // adopter's, so naming one here reads as the way the heartbeat is run.
+  for (const pattern of NAMES_A_PROVIDER) {
+    assert.match(RETIRED, pattern, `the refusal would miss the sentence it exists to keep out: ${pattern}`);
+    assert.doesNotMatch(header(), pattern, `the header still names one host's own wiring: ${pattern}`);
+  }
 });

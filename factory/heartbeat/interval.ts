@@ -2,10 +2,9 @@
  * How often the heartbeat runs, and the one place that says so (#261).
  *
  * The factory cannot set its own interval: the sender is run by whatever a
- * host schedules it with, a launchd job on the maintainer's machine today
- * (#111 is where that lives for good). So this is documentation with a test on
- * it rather than a knob, and it exists because the number was previously prose
- * copied into a dozen files, which is a number that has already drifted.
+ * host schedules it with. So this is documentation with a test on it rather
+ * than a knob, and it exists because the number was previously prose copied
+ * into a dozen files, which is a number that has already drifted.
  *
  * **The rule.** A deadline is only ever checked when a sweep runs, so the
  * interval is added to every one of them: a subject that crosses its deadline
