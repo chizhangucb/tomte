@@ -2,14 +2,14 @@
  * How often the heartbeat runs, and the one place that says so (#261).
  *
  * The factory cannot set its own interval: the sender is run by a **Host**,
- * whatever schedules it, which this repo does not own and cannot see. A host
- * that schedules carries a copy of this number of its own, which is why the
- * cloud recipe's cron is held to the constant by a test. A host that keeps a
- * **loop runner** alive carries none, since the loop reads the interval back
- * out of this file on every pass and a moved number reaches it with nothing
- * edited on the host. So this is documentation with a test on it rather than
- * a knob, and it exists because the number was previously prose copied into a
- * dozen files, which is a number that has already drifted.
+ * whatever runs it on the interval, which the factory does not own and cannot
+ * see. A host that schedules carries a copy of this number of its own, which
+ * is why the **cloud recipe**'s schedule is held to the constant by a test. A
+ * host that keeps a **loop runner** alive carries none, since the loop reads
+ * the interval back out of this file on every pass and a moved number reaches
+ * it with nothing edited on the host. So this is documentation with a test on
+ * it rather than a knob, and it exists because the number was previously prose
+ * copied into a dozen files, which is a number that has already drifted.
  *
  * **The rule.** A deadline is only ever checked when a sweep runs, so the
  * interval is added to every one of them: a subject that crosses its deadline

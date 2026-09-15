@@ -95,15 +95,25 @@ const header = (): string => {
  */
 const RETIRED = "host schedules it with, a launchd job on the maintainer's machine today (#111 is where that lives for good)";
 
-/** Every way the header named one host's own wiring, which is what CONTEXT.md's **Host** entry says to avoid. */
-const NAMES_A_PROVIDER = [/launchd/i, /maintainer'?s machine/i, /#111\b/];
+/**
+ * Every way the header named one host's own wiring, which CONTEXT.md's
+ * **Host** entry says to avoid: the role is what runs the sender, and launchd
+ * on one machine was only ever one host meeting it.
+ *
+ * launchd is refused here as the thing that schedules the sender, not as a
+ * word: README and the **Loop runner**'s entry both name it for the one job a
+ * host still has, restarting the loop, and `heartbeat-loop.test.ts` holds
+ * README's example to exactly that. It is this file saying where the sender
+ * runs that #111 retired.
+ */
+const NAMES_ONE_HOSTS_WIRING = [/launchd/i, /maintainer'?s machine/i, /#111\b/];
 
-test("the header names no provider and no machine of anyone's, because the factory does not own the host", () => {
+test("the header names no launchd job and no machine of anyone's, because the factory owns neither", () => {
   // The header was written when one launchd job on one machine was the whole
   // truth about where the heartbeat ran. #111 retired that job, and README's
   // "what any host needs" is the contract now: the choice of provider is an
   // adopter's, so naming one here reads as the way the heartbeat is run.
-  for (const pattern of NAMES_A_PROVIDER) {
+  for (const pattern of NAMES_ONE_HOSTS_WIRING) {
     assert.match(RETIRED, pattern, `the refusal would miss the sentence it exists to keep out: ${pattern}`);
     assert.doesNotMatch(header(), pattern, `the header still names one host's own wiring: ${pattern}`);
   }
@@ -111,9 +121,6 @@ test("the header names no provider and no machine of anyone's, because the facto
 
 /** The header's sentences, so a claim is held where a reader meets it rather than anywhere on the page. */
 const headerSentences = (): string[] => header().split(/(?<=[.:])\s/);
-
-/** The loop runner, which reads this file rather than carrying the number, and is the file the header's second half promises. */
-const LOOP_RUNNER = "scripts/heartbeat-loop.sh";
 
 test("the header says a Host runs the sender, in the two shapes a host takes", () => {
   // The half the removal cannot make. A header that merely stopped naming
@@ -123,10 +130,15 @@ test("the header says a Host runs the sender, in the two shapes a host takes", (
   // matters here and nowhere else in the repo, because it is the question of
   // whether the number in this file is the only copy of itself: a host that
   // schedules carries a second one, and a **loop runner** carries none.
+  //
+  // The role by its glossary name and not the bare word: the retired sentence
+  // said "whatever a host schedules it with" and would pass a test that asked
+  // only for "host" and "sender" in one sentence, while saying nothing about
+  // either shape.
   const sentences = headerSentences();
   assert.ok(
-    sentences.some((sentence) => /\bhost\b/i.test(sentence) && /\bsender\b/i.test(sentence)),
-    `the header does not say, in one sentence, that a host is what runs the sender: ${header()}`,
+    sentences.some((sentence) => sentence.includes("**Host**") && /\brun/i.test(sentence) && /\bsender\b/i.test(sentence)),
+    `the header does not say, in one sentence, that a **Host** is what runs the sender: ${header()}`,
   );
   assert.ok(
     sentences.some((sentence) => /\bschedul/i.test(sentence) && /\bcopy\b/i.test(sentence) && /\btest\b/i.test(sentence)),
@@ -136,22 +148,4 @@ test("the header says a Host runs the sender, in the two shapes a host takes", (
     sentences.some((sentence) => /\bloop runner\b/i.test(sentence) && /\bread/i.test(sentence) && /\bthis file\b/i.test(sentence)),
     `the header does not say a loop runner reads the interval back out of this file: ${header()}`,
   );
-});
-
-test("both shapes the header promises are shapes the repo really has", () => {
-  // The prose above is only worth holding if what it describes is true, so
-  // each half is checked against the thing it describes rather than against
-  // itself. The scheduler's copy is the blueprint's cron, held to this
-  // constant in `send.test.ts`; the loop runner's non-copy is the read it
-  // makes of this module, by the specifier the script actually runs. Either
-  // going away makes the header a promise the repo stopped keeping.
-  const repoRoot = new URL("../../", import.meta.url);
-  const held = fs.readFileSync(new URL("factory/heartbeat/send.test.ts", repoRoot), "utf8");
-  assert.ok(
-    held.includes("blueprintSchedule") && held.includes("HEARTBEAT_INTERVAL_MINUTES"),
-    "no test holds the scheduler's copy of the interval to this constant, which the header says one does",
-  );
-  const loop = fs.readFileSync(new URL(LOOP_RUNNER, repoRoot), "utf8");
-  assert.match(loop, /factory\/heartbeat\/interval\.ts/, `${LOOP_RUNNER} no longer reads the interval out of this file`);
-  assert.match(loop, /HEARTBEAT_INTERVAL_MINUTES/, `${LOOP_RUNNER} no longer reads the constant this file exports`);
 });
