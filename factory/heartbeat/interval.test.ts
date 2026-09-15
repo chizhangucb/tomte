@@ -108,3 +108,50 @@ test("the header names no provider and no machine of anyone's, because the facto
     assert.doesNotMatch(header(), pattern, `the header still names one host's own wiring: ${pattern}`);
   }
 });
+
+/** The header's sentences, so a claim is held where a reader meets it rather than anywhere on the page. */
+const headerSentences = (): string[] => header().split(/(?<=[.:])\s/);
+
+/** The loop runner, which reads this file rather than carrying the number, and is the file the header's second half promises. */
+const LOOP_RUNNER = "scripts/heartbeat-loop.sh";
+
+test("the header says a Host runs the sender, in the two shapes a host takes", () => {
+  // The half the removal cannot make. A header that merely stopped naming
+  // launchd would leave a reader with no answer to who does run the sender,
+  // and the answer is the one CONTEXT.md gives: a **Host**, which the factory
+  // does not own and cannot see, in either of its two shapes. Which shape
+  // matters here and nowhere else in the repo, because it is the question of
+  // whether the number in this file is the only copy of itself: a host that
+  // schedules carries a second one, and a **loop runner** carries none.
+  const sentences = headerSentences();
+  assert.ok(
+    sentences.some((sentence) => /\bhost\b/i.test(sentence) && /\bsender\b/i.test(sentence)),
+    `the header does not say, in one sentence, that a host is what runs the sender: ${header()}`,
+  );
+  assert.ok(
+    sentences.some((sentence) => /\bschedul/i.test(sentence) && /\bcopy\b/i.test(sentence) && /\btest\b/i.test(sentence)),
+    `the header does not say a host that schedules carries its own copy, held to this constant by a test: ${header()}`,
+  );
+  assert.ok(
+    sentences.some((sentence) => /\bloop runner\b/i.test(sentence) && /\bread/i.test(sentence) && /\bthis file\b/i.test(sentence)),
+    `the header does not say a loop runner reads the interval back out of this file: ${header()}`,
+  );
+});
+
+test("both shapes the header promises are shapes the repo really has", () => {
+  // The prose above is only worth holding if what it describes is true, so
+  // each half is checked against the thing it describes rather than against
+  // itself. The scheduler's copy is the blueprint's cron, held to this
+  // constant in `send.test.ts`; the loop runner's non-copy is the read it
+  // makes of this module, by the specifier the script actually runs. Either
+  // going away makes the header a promise the repo stopped keeping.
+  const repoRoot = new URL("../../", import.meta.url);
+  const held = fs.readFileSync(new URL("factory/heartbeat/send.test.ts", repoRoot), "utf8");
+  assert.ok(
+    held.includes("blueprintSchedule") && held.includes("HEARTBEAT_INTERVAL_MINUTES"),
+    "no test holds the scheduler's copy of the interval to this constant, which the header says one does",
+  );
+  const loop = fs.readFileSync(new URL(LOOP_RUNNER, repoRoot), "utf8");
+  assert.match(loop, /factory\/heartbeat\/interval\.ts/, `${LOOP_RUNNER} no longer reads the interval out of this file`);
+  assert.match(loop, /HEARTBEAT_INTERVAL_MINUTES/, `${LOOP_RUNNER} no longer reads the constant this file exports`);
+});
