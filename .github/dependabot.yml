@@ -12,5 +12,3 @@ updates:
       - dependency-name: "@ai-hero/sandcastle"
       - dependency-name: "@anthropic-ai/claude-code"
     open-pull-requests-limit: 2
-    labels:
-      - dependencies
