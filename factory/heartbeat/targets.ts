@@ -11,6 +11,10 @@
  * sweep the way tomte-fixture does, and the same idle skip is what keeps a
  * quiet one free.
  *
+ * groats is private, so it bills a minute per non-idle sweep like the rest. Its
+ * ready-for-agent backlog is large but held behind dependency edges, so only
+ * the foundation slice dispatches until the skeleton merges.
+ *
  * This module imports nothing, so `send.ts` reaches it on bare
  * `node --experimental-strip-types`.
  */
@@ -19,4 +23,5 @@ export const TARGET_REPOS: readonly string[] = [
   "chizhangucb/chronicle",
   "chizhangucb/chizhang-2",
   "chizhangucb/tomte",
+  "chizhangucb/groats",
 ];
