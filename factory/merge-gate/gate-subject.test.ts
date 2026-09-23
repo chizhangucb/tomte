@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { test } from "node:test";
 
-import { gateSubject } from "./gate-subject";
+import { gateEvent, gateSubject } from "./gate-subject";
 
 /** A `pull_request` payload as GitHub sends it, cut down to what the gate reads. */
 const pullRequest = (overrides: Record<string, unknown> = {}) => ({
@@ -68,4 +71,29 @@ test("an event the gate cannot read is refused by name", () => {
   // A caller that wires the gate to a third event gets a failing job that says
   // which event it was, rather than a run against an empty base ref.
   assert.throws(() => gateSubject({ name: "push", payload: { ref: "refs/heads/main" } }), /push/);
+});
+
+test("the event comes from the run's own payload file, so nothing tells the gate twice what it is judging", () => {
+  // Actions writes the payload to a file and names the event in the
+  // environment. Reading both is what lets the gate take its subject from one
+  // place; the alternative, a caller passing the number and the base ref in as
+  // inputs, is a second definition that a merge_group run would have to fill
+  // in differently.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gate-event-"));
+  const file = path.join(dir, "event.json");
+  fs.writeFileSync(file, JSON.stringify(pullRequest()));
+  assert.deepEqual(gateEvent({ GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: file }), {
+    name: "pull_request",
+    payload: pullRequest(),
+  });
+  assert.deepEqual(gateSubject(gateEvent({ GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: file })), {
+    prNumber: "344",
+    headSha: "f00dcafe",
+    baseRef: "main",
+  });
+});
+
+test("a run with no payload file is refused, rather than judged against an empty base", () => {
+  assert.throws(() => gateEvent({ GITHUB_EVENT_NAME: "pull_request" }), /GITHUB_EVENT_PATH/);
+  assert.throws(() => gateEvent({ GITHUB_EVENT_PATH: "/nowhere.json" }), /GITHUB_EVENT_NAME/);
 });

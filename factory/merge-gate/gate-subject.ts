@@ -14,6 +14,7 @@
  * fetches the linked ticket, so a branch that does not carry one is refused
  * rather than guessed at.
  */
+import * as fs from "node:fs";
 
 /** A webhook event as the gate receives it: GitHub's name for it, and its payload. */
 export type GateEvent = { name: string; payload: unknown };
@@ -24,6 +25,20 @@ export type GateEvent = { name: string; payload: unknown };
  * always carried.
  */
 export type GateSubject = { prNumber: string; headSha: string; baseRef: string };
+
+/**
+ * The event this run was started by, from the payload Actions wrote for it.
+ * Taking it from there rather than from caller inputs is what keeps the gate's
+ * subject defined once: a caller cannot hand in a pull request number on an
+ * event that has none.
+ */
+export const gateEvent = (env: NodeJS.ProcessEnv): GateEvent => {
+  const name = env.GITHUB_EVENT_NAME;
+  const file = env.GITHUB_EVENT_PATH;
+  if (!name) throw new Error("GITHUB_EVENT_NAME is not set, so the merge gate cannot tell which event woke it");
+  if (!file) throw new Error("GITHUB_EVENT_PATH is not set, so the merge gate cannot read the event that woke it");
+  return { name, payload: JSON.parse(fs.readFileSync(file, "utf8")) };
+};
 
 /** `refs/heads/main` as the rest of the factory writes it: `main`. */
 const branchName = (ref: string): string => ref.replace(/^refs\/heads\//, "");

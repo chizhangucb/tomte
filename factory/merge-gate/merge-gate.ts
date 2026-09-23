@@ -1,9 +1,14 @@
 /**
- * Runs the two factory merge gate checks on a PR and writes their verdicts to
+ * Runs the two factory merge gate checks and writes their verdicts to
  * OUTPUT_DIR/merge-gate.json. The workflow turns that file into the
  * `factory/red-green` and `factory/test-integrity` commit statuses.
  *
- * Runs in the target checkout at the PR head with `origin/<base>` fetched.
+ * It judges a pull request, or the merge queue's candidate for one, on the
+ * same terms: `gate-subject.ts` reads the pull request number, the head and
+ * the base branch off whichever event woke the run, and nothing below this
+ * line knows which it was.
+ *
+ * Runs in the target checkout at that head with `origin/<base>` fetched.
  * The decisions live in pure modules next to this file; this script only
  * gathers inputs (diff, linked ticket number) and runs tests.
  */
@@ -12,19 +17,20 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { required } from "../lib/env";
 import { gh } from "../lib/gh";
 import { writeJson, writeText } from "../lib/run-output";
 import { safeSh, sh } from "../lib/sh";
 import { linkedIssueNumber } from "../lib/linked-issue";
 import { parseNameStatus, type ChangedFile } from "./changed-files";
+import { gateEvent, gateSubject } from "./gate-subject";
 import { redGreenPlan, redGreenVerdict, type FileRun, type TestResult } from "./red-green";
 import { checkTestIntegrity } from "./test-integrity";
 import type { WorkflowFile } from "./unrequired-jobs";
 import { DEFAULT_TEST_COMMAND, reportArgs, runnability } from "./unrunnable";
 
-const prNumber = required("PR_NUMBER");
-const baseRef = required("BASE_REF");
+// Off the event, not off caller inputs: the gate runs on a pull request and on
+// the merge queue's candidate for it, and only the event says which.
+const { prNumber, baseRef } = gateSubject(gateEvent(process.env));
 // The fallback is the one command `runnability` can read, taken from there:
 // a second copy that drifts leaves detection silently off.
 const testCommand = process.env.TEST_COMMAND?.trim() || DEFAULT_TEST_COMMAND;
