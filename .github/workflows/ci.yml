@@ -2,6 +2,10 @@ name: ci
 
 on:
   pull_request:
+  # The merge queue asks the same `check` of a queued candidate, rebased onto main,
+  # just before it lands (#344). No queue is enabled yet, so GitHub sends this event
+  # to nobody; the trigger is what makes enabling one safe.
+  merge_group:
   # No push trigger: `check` is required on a head up to date with main, so a merge
   # lands the tree the pull request already checked. Run by hand after a bypass (#223).
   # `check` therefore posts on no main commit. onboard.sh never reads commits anyway (#228):

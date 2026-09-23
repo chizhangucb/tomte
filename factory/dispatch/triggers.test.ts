@@ -517,3 +517,51 @@ test("the prose that names the dispatcher's issue triggers names the caller's se
     assert.deepEqual(named[0], subscribed, `${site} names the trigger set the caller subscribes to`);
   }
 });
+
+test("the merge queue's candidate is judged by the merge gate, and wakes nothing else (#344)", () => {
+  // Acceptance criterion 2. A `merge_group` payload carries neither an issue
+  // nor a pull request, so `evaluate` throws on any condition that reads one
+  // without saying which event it is for. That is the assertion underneath
+  // this one: widening the trigger set delivers the new event to every job in
+  // the file, and a job that answered it by accident would run a model on a
+  // payload it cannot read.
+  const candidate: Context = { event_name: "merge_group", event: { action: "checks_requested" } };
+  const woken = [...conditions].filter(([, condition]) => evaluate(condition, candidate)).map(([id]) => id);
+  assert.deepEqual(woken, ["merge-gate"], "the queue candidate wakes the merge gate alone");
+  // The same set a pull request opening wakes, which is what "the same jobs
+  // run" means: the queue is judged by the job the pull request was, not by a
+  // second one wired up beside it.
+  const opened: Context = { event_name: "pull_request", event: { action: "opened" } };
+  assert.deepEqual(
+    woken,
+    [...conditions].filter(([, condition]) => evaluate(condition, opened)).map(([id]) => id),
+    "a queued candidate and an opening pull request wake the same jobs",
+  );
+});
+
+test("a paused factory still judges a queued candidate, or the queue waits on the pause forever", () => {
+  // The merge gate is one of the two jobs a pause must never touch (#171), and
+  // the queue is the case that makes that rule load-bearing rather than tidy:
+  // a candidate whose required checks never report is not rejected, it sits in
+  // the queue until someone dequeues it by hand. The `paused` job still
+  // announces itself on the event, so the reason is visible on the run.
+  const candidate: Context = { event_name: "merge_group", event: { action: "checks_requested" } };
+  const paused = pausedWith("runaway sweep, see #171", candidate);
+  assert.equal(evaluate(conditions.get("merge-gate")!, paused), true, "the merge gate judges the candidate while paused");
+  assert.equal(evaluate(conditions.get("paused")!, paused), true, "the pause announces itself on the candidate's run");
+  for (const job of [...conditions.keys()].filter((job) => !["merge-gate", "paused"].includes(job))) {
+    assert.equal(evaluate(conditions.get(job)!, paused), false, `${job} does not run on a queued candidate`);
+  }
+});
+
+test("adding the merge-queue trigger changed no answer for any event the caller already answered", () => {
+  // Criterion 3, the safe no-op, stated where it can actually fail: every row
+  // of ISSUE_EVENTS and every row of WAKING_EVENTS is answered above, and this
+  // says the one new event is the only thing the caller learned to answer. A
+  // condition widened with `||` past the event it was meant for would show up
+  // here as a job waking on somebody else's payload.
+  for (const { job, context } of WAKING_EVENTS) {
+    const woken = [...conditions].filter(([, condition]) => evaluate(condition, context)).map(([id]) => id);
+    assert.deepEqual(woken, [job], `${context.event_name} wakes ${job} and nothing else`);
+  }
+});

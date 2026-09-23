@@ -1,7 +1,17 @@
-# Reusable: the factory's two merge gate checks on a PR, posted as commit statuses
+# Reusable: the factory's two merge gate checks, posted as commit statuses
 # `factory/red-green` and `factory/test-integrity` so a target can require
 # them by name. Called from a target repo's thin factory workflow on
-# `pull_request`. No agent runs here; the decisions are pure functions in
+# `pull_request` and on `merge_group`, the merge queue's request for the
+# required checks on a candidate rebased onto the latest main (#344).
+#
+# One job answers both. This workflow has no `on:` of its own beyond
+# `workflow_call`, so it runs on whatever event reached the caller, and
+# factory/merge-gate/gate-subject.ts reads the pull request number, the head
+# and the base branch off that event. Nothing below knows which it was, which
+# is what makes green mean the same thing on a queued candidate as on the pull
+# request it came from.
+#
+# No agent runs here; the decisions are pure functions in
 # factory/merge-gate, the script only gathers the diff and the linked ticket body.
 name: factory merge gate
 
@@ -43,9 +53,12 @@ jobs:
       statuses: write
 
     env:
-      PR_NUMBER: ${{ github.event.pull_request.number }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      BASE_REF: ${{ github.event.pull_request.base.ref }}
+      # The head the statuses go on, needed before anything is checked out, which is
+      # earlier than gate-subject.ts can run. It is the one value read off the payload
+      # here; the paths are HEAD_SHA_PATHS in that module, and its test pins this line
+      # to them. The pull request number and the base branch are read there instead,
+      # since a merge_group payload spells both of them differently.
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -60,10 +73,10 @@ jobs:
               -f state=pending -f context="$ctx" -f target_url="$RUN_URL" -f description="running" >/dev/null
           done
 
-      - name: Checkout PR head
+      - name: Checkout the head under judgment
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ env.HEAD_SHA }}
           fetch-depth: 0
           path: target
 
@@ -124,7 +137,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: factory-merge-gate-pr-${{ github.event.pull_request.number }}-run-${{ github.run_attempt }}
+          # Keyed on the head rather than the pull request number: a queued candidate is a
+          # different commit of the same pull request, and the two must not collide.
+          name: factory-merge-gate-${{ env.HEAD_SHA }}-run-${{ github.run_attempt }}
           path: ${{ runner.temp }}/factory-out
           if-no-files-found: ignore
 

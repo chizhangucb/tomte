@@ -24,6 +24,13 @@ on:
     types: [labeled]
   pull_request:
     types: [opened, synchronize, reopened, closed] # closed: the first-20 audit on merged factory PRs
+  merge_group:
+    # The merge queue's candidate: the pull request rebased onto the latest main,
+    # asking for the required checks just before it lands. Only merge-gate answers
+    # it, and it runs the same job it runs on a pull request, so `factory/red-green`
+    # and `factory/test-integrity` mean the same thing on both (#344). Harmless
+    # until this repo's ruleset turns a queue on: GitHub sends the event to nobody
+    # before that, so nothing here changes.
   push:
     branches: [main] # update-branch: bring stale auto-merge PRs up to date when main moves
   repository_dispatch:
@@ -188,7 +195,9 @@ jobs:
       # Keep it equal to the implement job's, or a retry loses its failure context.
       # trusted_author_associations: OWNER,MEMBER,COLLABORATOR
   merge-gate:
-    if: github.event_name == 'pull_request' && github.event.action != 'closed'
+    if: >-
+      (github.event_name == 'pull_request' && github.event.action != 'closed') ||
+      github.event_name == 'merge_group'
     uses: chizhangucb/tomte/.github/workflows/merge-gate.yml@main
     secrets: inherit
     with:

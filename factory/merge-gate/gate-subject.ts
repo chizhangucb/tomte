@@ -40,6 +40,18 @@ export const gateEvent = (env: NodeJS.ProcessEnv): GateEvent => {
   return { name, payload: JSON.parse(fs.readFileSync(file, "utf8")) };
 };
 
+/**
+ * Where each event carries the head the gate judges. Exported because the
+ * workflow has to read it too: the head sha is wanted before anything is
+ * checked out, to mark both checks pending, which is earlier than this module
+ * can run. Naming the paths here keeps that one YAML expression tied to this
+ * function rather than being a second reading of the payload.
+ */
+export const HEAD_SHA_PATHS = {
+  pull_request: "pull_request.head.sha",
+  merge_group: "merge_group.head_sha",
+} as const;
+
 /** `refs/heads/main` as the rest of the factory writes it: `main`. */
 const branchName = (ref: string): string => ref.replace(/^refs\/heads\//, "");
 
@@ -61,7 +73,7 @@ export const gateSubject = ({ name, payload }: GateEvent): GateSubject => {
   if (name === "pull_request") {
     return {
       prNumber: read(payload, "pull_request.number"),
-      headSha: read(payload, "pull_request.head.sha"),
+      headSha: read(payload, HEAD_SHA_PATHS.pull_request),
       baseRef: read(payload, "pull_request.base.ref"),
     };
   }
@@ -75,7 +87,7 @@ export const gateSubject = ({ name, payload }: GateEvent): GateSubject => {
     }
     return {
       prNumber: number,
-      headSha: read(payload, "merge_group.head_sha"),
+      headSha: read(payload, HEAD_SHA_PATHS.merge_group),
       baseRef: branchName(read(payload, "merge_group.base_ref")),
     };
   }

@@ -11,6 +11,11 @@ name: check
 
 on:
   pull_request:
+  # The merge queue asks for the same required name on a queued candidate before it
+  # lands. A required workflow that does not answer `merge_group` never reports on
+  # one, and the queue waits on it forever (#344). Safe with no queue enabled: GitHub
+  # sends the event to nobody until a repo turns one on.
+  merge_group:
   workflow_dispatch:
 
 jobs:

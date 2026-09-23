@@ -16,3 +16,25 @@
 
   It passes vacuously twice over: when the diff changes no source file, and when the diff deletes a source or test file (a test renamed out of the test tree counts; a deleted doc or config file does not), while adding or changing no test, with a reason that says nothing was proved. Not source: a doc, a dotfile anywhere, and a data or manifest file (`.yml`, `.json`, `.toml`, `.lock`, and the rest of `CONFIG_EXTENSIONS`) at the repo root or under a dot directory. The same extension nested deeper is data the code reads, and stays source. Outside those two passes, a source change with no test change fails.
 - `factory/test-integrity`: fails on a new `skip`, `only` or `todo` marker in a test file. A deleted test file, or a test renamed out of the test tree, never fails it; the check lists each one in its summary and in `merge-gate.json` as `deletedTests`, for the reviewer and the audit to judge against the ticket.
+
+## Which event the gate answers
+
+The gate runs on a pull request and on `merge_group`, GitHub's merge-queue event, and judges both the same way (#344). A queue rebases a queued pull request onto the latest default branch and asks for the required checks on that candidate just before it lands; a required workflow that does not subscribe to `merge_group` never reports on one, so the name stays pending and the queue waits on it forever.
+
+It is one definition, not two. `merge-gate.yml` is a `workflow_call` workflow with no triggers of its own, so it runs on whatever event reached the caller, and `factory/merge-gate/gate-subject.ts` reads the three things the gate needs off whichever payload arrived: the pull request number, the head sha, and the base branch. A `merge_group` payload carries no `pull_request` object at all, and the queue branch is the only place it says which pull request the candidate came from (`gh-readonly-queue/<base>/pr-<number>-<sha>`). Nothing behind that function knows which event ran, so `factory/red-green` and `factory/test-integrity` mean on a candidate exactly what they mean on the pull request.
+
+A queue no repo has enabled sends no `merge_group`, so the trigger changes nothing until a target's ruleset turns one on.
+
+### The one line a target adds
+
+Every workflow a target's merge rule requires by name needs this, next to its existing `pull_request:`, and nothing else:
+
+```yaml
+on:
+  pull_request:
+  merge_group:
+```
+
+That is the whole of the caller-side change. Do it in **every** required workflow, not just some: the queue waits on all of them, and one that stays silent stalls the queue as surely as a red one blocks it. For a typical target that is the caller `.github/workflows/factory.yml` (which carries `factory/red-green` and `factory/test-integrity` to the candidate), the check roll-up that publishes `check`, and whatever else the ruleset names -- `gitleaks` and `e2e` on chronicle, for instance. `templates/factory.yml` and `templates/rollup-check.yml` already carry it, so a target copying either today needs no edit; `scripts/onboard.sh` writes the roll-up from that template, so an onboarded starter file carries it too.
+
+Two things it does not cover, both deliberately out of the trigger's scope: the caller's `merge-gate` job condition has to admit the event as well (`templates/factory.yml` has it, so re-copy that job's `if:` with the `on:` block), and enabling the queue itself is a per-repo ruleset change, sequenced after every required workflow answers the event.

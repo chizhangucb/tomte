@@ -204,11 +204,15 @@ test("the reconciler reads a role from each agent workflow's own job", () => {
   }
 });
 
-test("this repo's CI runs on a pull request and on demand, never on a push to the default branch", () => {
+test("this repo's CI runs on a pull request, on a queued candidate and on demand, never on a push to the default branch", () => {
   // `check` is required on a head up to date with main, so a merge lands the tree the
   // pull request already checked and a push run would say nothing new (#223).
+  // `merge_group` is the third way a head gets up to date with main: the merge queue
+  // rebases a queued pull request and asks for the required checks on that candidate
+  // before it lands, and a required workflow that does not answer it leaves `check`
+  // pending forever (#344). No queue is enabled on this repo yet, so it fires on nothing.
   const yaml = read("ci.yml");
-  assert.deepEqual(triggersOf(yaml), ["pull_request", "workflow_dispatch"]);
+  assert.deepEqual(triggersOf(yaml), ["merge_group", "pull_request", "workflow_dispatch"]);
   // A manual run against main does what a pull request run does: one job, nothing
   // conditional, nothing read off the event.
   assert.deepEqual(jobIdsOf(yaml), ["check"]);
